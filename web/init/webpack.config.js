@@ -78,7 +78,6 @@ module.exports = (env, { mode = "production" }) => {
             loader: 'babel-loader',
             options: {
               cacheDirectory: true,
-              cacheCompression: false,
             }
           }
         },
