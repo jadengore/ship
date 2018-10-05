@@ -1,34 +1,47 @@
 const path = require("path");
 const MiniCssExtractPlugin = require("mini-css-extract-plugin");
-var DashboardPlugin = require("webpack-dashboard/plugin");
+const UglifyJsPlugin = require("uglifyjs-webpack-plugin");
+const OptimizeCSSAssetsPlugin = require("optimize-css-assets-webpack-plugin");
+const DashboardPlugin = require("webpack-dashboard/plugin");
 
 const basePlugins = [
   new MiniCssExtractPlugin({
-    filename: "styles.css"
+    filename: "[name].css"
   }),
 ];
 
-module.exports = (env, { mode }) => {
+module.exports = (env, { mode = "production" }) => {
   let plugins = [...basePlugins];
 
   if (process.env.DASHBOARD) {
-    plugins = plugins.concat([new DashboardPlugin()])
+    plugins = plugins.concat(new DashboardPlugin())
   }
 
   const isProduction = mode === "production";
-  let optimizations = {};
-  if (isProduction) {
-    optimizations = {
-      optimization: {
-        minimizer: [
-          new UglifyJsPlugin({
-            cache: true,
-            parallel: true,
-            sourceMap: true
-          }),
-          new OptimizeCSSAssetsPlugin()
-        ]
+  let optimization = {
+    splitChunks: {
+      cacheGroups: {
+        styles: {
+          name: 'styles',
+          test: /\.s?css$/,
+          chunks: 'all',
+          enforce: true
+        }
       }
+    }
+  };
+
+  if (isProduction) {
+    optimization = {
+      ...optimization,
+      minimizer: [
+        new UglifyJsPlugin({
+          cache: true,
+          parallel: true,
+          sourceMap: true
+        }),
+        new OptimizeCSSAssetsPlugin({})
+      ]
     }
   }
 
@@ -61,7 +74,13 @@ module.exports = (env, { mode }) => {
         {
           test: /\.jsx?$/,
           exclude: /node_modules/,
-          loader: 'babel-loader',
+          use: {
+            loader: 'babel-loader',
+            options: {
+              cacheDirectory: true,
+              cacheCompression: false,
+            }
+          }
         },
         {
             test: /\.s?css$/,
@@ -86,6 +105,6 @@ module.exports = (env, { mode }) => {
       ]
     },
     plugins,
-    ...optimizations,
+    optimization,
   }
 };
