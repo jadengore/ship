@@ -6,7 +6,8 @@ const DashboardPlugin = require("webpack-dashboard/plugin");
 
 const basePlugins = [
   new MiniCssExtractPlugin({
-    filename: "[name].css"
+    filename: "[name].css",
+    chunkFilename: "[id].css"
   }),
 ];
 
@@ -50,7 +51,7 @@ module.exports = (env, { mode = "production" }) => {
         "babel-polyfill",
         path.resolve(__dirname, 'src/index.js'),
     ],
-    mode: "production",
+    mode,
     output: {
       path: path.resolve(__dirname, './dist'),
       filename: 'index.js',
