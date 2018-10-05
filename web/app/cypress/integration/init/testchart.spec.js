@@ -6,6 +6,7 @@ const buildRepeatKeyString = (key, length) =>
 describe("Ship Init test-charts/modify-chart", () => {
   before(() => {
     cy.visit(Cypress.env("HOST"));
+    cy.wait(500);
   });
 
   context("intro", () => {
