@@ -4,7 +4,7 @@ const buildRepeatKeyString = (key, length) =>
     .join("");
 
 describe("Ship Init test-charts/modify-chart", () => {
-  before(done => {
+  before(() => {
     cy.visit(Cypress.env("HOST"));
   });
 
