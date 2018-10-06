@@ -6,21 +6,6 @@ const buildRepeatKeyString = (key, length) =>
 describe("Ship Init test-charts/modify-chart", () => {
   before(done => {
     cy.visit(Cypress.env("HOST"));
-    cy.on("uncaught:exception", (error, runnable) => {
-      console.log(error);
-      // expect(err.message).to.include('something about the error')
-
-      // using mocha's async done callback to finish
-      // this test so we prove that an uncaught exception
-      // was thrown
-      done();
-
-      // return false to prevent the error from
-      // failing this test
-      // return false;
-      return true;
-    });
-    done();
   });
 
   context("intro", () => {
@@ -43,6 +28,7 @@ describe("Ship Init test-charts/modify-chart", () => {
           16
         );
         const backspacesToDeleteValue = buildRepeatKeyString("{backspace}", 5);
+        cy.wait(100); // workaround for ACE editor to load
         cy.get(".ace_text-input")
           .first()
           .type(
