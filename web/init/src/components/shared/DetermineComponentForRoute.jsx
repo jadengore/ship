@@ -9,7 +9,6 @@ import Loader from "./Loader";
 import StepMessage from "./StepMessage";
 import StepBuildingAssets from "./StepBuildingAssets";
 import StepHelmIntro from "../../containers/HelmChartInfo";
-import StepHelmValues from "../kustomize/HelmValuesEditor";
 import StepTerraform from "./StepTerraform";
 import StepKubectlApply from "./StepKubectlApply";
 import KustomizeEmpty from "../kustomize/kustomize_overlay/KustomizeEmpty";
@@ -27,7 +26,10 @@ export class DetermineComponentForRoute extends React.Component {
     super(props);
     this.state = {
       maxPollReached: false,
+      StepHelmValues: null,
     };
+    import("../kustomize/HelmValuesEditor")
+      .then((StepHelmValues) => this.setState({ StepHelmValues }))
   }
 
   componentDidMount() {
@@ -139,6 +141,7 @@ export class DetermineComponentForRoute extends React.Component {
       initializeStep,
       routes,
     } = this.props;
+    const { StepHelmValues } = this.state;
     const { id: routeId } = find(routes, { phase }) || {};
 
     if (!phase || !phase.length) return null;
@@ -223,6 +226,10 @@ export class DetermineComponentForRoute extends React.Component {
         />
       );
     case "helm-values":
+      if (!StepHelmValues) {
+        return null;
+      }
+
       return (
         <StepHelmValues
           saveValues={this.props.saveHelmChartValues}

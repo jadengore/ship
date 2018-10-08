@@ -1,7 +1,6 @@
 import React from "react";
 import * as linter from "replicated-lint";
 import Linter from "../shared/Linter";
-import AceEditor from "react-ace";
 import ErrorBoundary from "../../ErrorBoundary";
 import get from "lodash/get";
 import find from "lodash/find";
@@ -22,7 +21,14 @@ export default class HelmValuesEditor extends React.Component {
       saving: false,
       saveFinal: false,
       unsavedChanges: false,
+      AceEditor: null,
     }
+    import("react-ace").then((AceEditor) => {
+      Promise.all([
+        import("brace/mode/yaml"),
+        import("brace/theme/chrome"),
+      ]).then(() => this.setState({ AceEditor }));
+    });
   }
 
   componentDidMount() {
@@ -139,12 +145,17 @@ export default class HelmValuesEditor extends React.Component {
       saveFinal,
       savedYaml,
       helmLintErrors,
+      AceEditor,
     } = this.state;
     const {
       values,
       readme,
       name
     } = this.props.shipAppMetadata;
+
+    if (!AceEditor) {
+      return null;
+    }
 
     return (
       <ErrorBoundary>

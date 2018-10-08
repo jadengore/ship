@@ -1,10 +1,6 @@
 import React from "react";
-import ace from "brace";
-import AceEditor from "react-ace";
 import * as ast from "yaml-ast-parser";
 import find from "lodash/find";
-
-const { addListener, removeListener } = ace.acequire("ace/lib/event");
 
 export const PATCH_TOKEN = "TO_BE_MODIFIED";
 
@@ -14,7 +10,12 @@ export class AceEditorHOC extends React.Component {
     this.state = {
       activeMarker: [],
       markers: [],
+      AceEditor: null,
     };
+    this.addListener = null;
+    this.removeListener = null;
+
+    import("react-ace").then((AceEditor) => this.setState({ AceEditor }));
   }
 
   componentDidUpdate(prevProps) {
@@ -36,15 +37,23 @@ export class AceEditorHOC extends React.Component {
   }
 
   componentDidMount() {
-    addListener(this.aceEditorBase.editor, "click", this.addToOverlay)
-    addListener(this.aceEditorBase.editor.renderer.scroller, "mousemove", this.setActiveMarker);
-    addListener(this.aceEditorBase.editor.renderer.scroller, "mouseout", this.setActiveMarker);
+    import("brace").then(({ acequire }) => {
+      const { addListener, removeListener } = acequire("ace/lib/event");
+      this.addListener = addListener;
+      this.removeListener = removeListener;
+
+      addListener(this.aceEditorBase.editor, "click", this.addToOverlay)
+      addListener(this.aceEditorBase.editor.renderer.scroller, "mousemove", this.setActiveMarker);
+      addListener(this.aceEditorBase.editor.renderer.scroller, "mouseout", this.setActiveMarker);
+    })
   }
 
   componentWillUnmount() {
-    removeListener(this.aceEditorBase.editor, "click", this.addToOverlay);
-    removeListener(this.aceEditorBase.editor.renderer.scroller, "mousemove", this.setActiveMarker);
-    removeListener(this.aceEditorBase.editor.renderer.scroller, "mouseout", this.setActiveMarker)
+    if (this.removeListener) {
+      this.removeListener(this.aceEditorBase.editor, "click", this.addToOverlay);
+      this.removeListener(this.aceEditorBase.editor.renderer.scroller, "mousemove", this.setActiveMarker);
+      this.removeListener(this.aceEditorBase.editor.renderer.scroller, "mouseout", this.setActiveMarker)
+    }
   }
 
   findMarkerAtRow = (row, markers) => (
@@ -147,7 +156,11 @@ export class AceEditorHOC extends React.Component {
 
   render() {
     const { fileToView } = this.props;
-    const { activeMarker } = this.state;
+    const { activeMarker, AceEditor } = this.state;
+
+    if (!AceEditor) {
+      return null;
+    }
 
     return (
       <AceEditor

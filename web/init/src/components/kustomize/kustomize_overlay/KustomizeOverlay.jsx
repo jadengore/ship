@@ -1,8 +1,6 @@
 import React from "react";
 import Modal from "react-modal";
-import AceEditor from "react-ace";
 import ReactTooltip from "react-tooltip"
-import * as yaml from "js-yaml";
 import isEmpty from "lodash/isEmpty";
 import sortBy from "lodash/sortBy";
 import pick from "lodash/pick";
@@ -15,9 +13,6 @@ import FileTree from "./FileTree";
 import Loader from "../../shared/Loader";
 import { AceEditorHOC, PATCH_TOKEN } from "./AceEditorHOC";
 import DiffEditor from "../../shared/DiffEditor";
-
-import "../../../../node_modules/brace/mode/yaml";
-import "../../../../node_modules/brace/theme/chrome";
 
 export default class KustomizeOverlay extends React.Component {
   constructor() {
@@ -35,7 +30,21 @@ export default class KustomizeOverlay extends React.Component {
       savingFinalize: false,
       displayConfirmModal: false,
       overlayToDelete: "",
+      AceEditor: null,
     };
+
+    this.jsYAML = null;
+
+    import("react-ace").then((AceEditor) => {
+      Promise.all([
+        import("brace/mode/yaml"),
+        import("brace/theme/chrome"),
+      ]).then(() => this.setState({ AceEditor }));
+    });
+
+    import("js-yaml").then((jsYAML) => {
+      this.jsYAML = jsYAML;
+    });
   }
 
   toggleModal = (overlayPath) => {
@@ -98,12 +107,16 @@ export default class KustomizeOverlay extends React.Component {
   }
 
   createOverlay = () => {
-    const { selectedFile } = this.state;
+    const { selectedFile, jsYAML } = this.state;
     let file = find(this.props.fileContents, ["key", selectedFile]);
     if (!file) return;
-    file = yaml.safeLoad(file.baseContent)
+
+    if (!jsYAML) {
+      throw new Error("Failed to load js-yaml dependency");
+    }
+    file = jsYAML.safeLoad(file.baseContent)
     const overlayFields = pick(file, "apiVersion", "kind", "metadata.name");
-    const overlay = yaml.safeDump(overlayFields);
+    const overlay = jsYAML.safeDump(overlayFields);
     this.setState({ patch: `--- \n${overlay}` });
   }
 
@@ -226,6 +239,7 @@ export default class KustomizeOverlay extends React.Component {
       patch,
       savingFinalize,
       fileContents,
+      AceEditor,
     } = this.state;
     const fileToView = defaultTo(find(fileContents, ["key", selectedFile]), {});
     const showOverlay = patch.length;
@@ -307,24 +321,28 @@ export default class KustomizeOverlay extends React.Component {
                     <div className="flex1 AceEditor--wrapper">
                       {showOverlay && <span data-tip="close-overlay-tooltip" data-for="close-overlay-tooltip" className="icon clickable u-closeOverlayIcon" onClick={() => this.toggleModal(this.state.selectedFile)}></span>}
                       <ReactTooltip id="close-overlay-tooltip" effect="solid" className="replicated-tooltip">Discard overlay</ReactTooltip>
-                      <AceEditor
-                        ref={this.setAceEditor}
-                        mode="yaml"
-                        theme="chrome"
-                        className="flex1 flex"
-                        value={patch || ""}
-                        height="100%"
-                        width="100%"
-                        editorProps={{
-                          $blockScrolling: Infinity,
-                          useSoftTabs: true,
-                          tabSize: 2,
-                        }}
-                        setOptions={{
-                          scrollPastEnd: false
-                        }}
-                        onChange={this.updateModifiedPatch}
-                      />
+                      {
+                        AceEditor && (
+                          <AceEditor
+                            ref={this.setAceEditor}
+                            mode="yaml"
+                            theme="chrome"
+                            className="flex1 flex"
+                            value={patch || ""}
+                            height="100%"
+                            width="100%"
+                            editorProps={{
+                              $blockScrolling: Infinity,
+                              useSoftTabs: true,
+                              tabSize: 2,
+                            }}
+                            setOptions={{
+                              scrollPastEnd: false
+                            }}
+                            onChange={this.updateModifiedPatch}
+                          />
+                        )
+                      }
                     </div>
                   </div>
                 </div>
