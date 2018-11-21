@@ -22,6 +22,7 @@ import (
 
 type Manager interface {
 	SerializeHelmValues(values string, defaults string) error
+	SerializeReleaseName(name string) error
 	SerializeConfig(
 		assets []api.Asset,
 		meta api.ReleaseMetadata,
@@ -34,6 +35,7 @@ type Manager interface {
 	SerializeContentSHA(contentSHA string) error
 	SerializeShipMetadata(api.ShipAppMetadata, string) error
 	SerializeAppMetadata(api.ReleaseMetadata) error
+	SerializeListsMetadata(List) error
 	Save(v VersionedState) error
 	ResetLifecycle() error
 }
@@ -77,12 +79,12 @@ func (m *MManager) SerializeShipMetadata(metadata api.ShipAppMetadata, applicati
 	}
 
 	versionedState := current.Versioned()
-	versionedState.V1.Metadata = map[string]string{
-		"applicationType": applicationType,
-		"releaseNotes":    metadata.ReleaseNotes,
-		"version":         metadata.Version,
-		"icon":            metadata.Icon,
-		"name":            metadata.Name,
+	versionedState.V1.Metadata = &Metadata{
+		ApplicationType: applicationType,
+		ReleaseNotes:    metadata.ReleaseNotes,
+		Version:         metadata.Version,
+		Icon:            metadata.Icon,
+		Name:            metadata.Name,
 	}
 
 	return m.serializeAndWriteState(versionedState)
@@ -99,12 +101,12 @@ func (m *MManager) SerializeAppMetadata(metadata api.ReleaseMetadata) error {
 	}
 
 	versionedState := current.Versioned()
-	versionedState.V1.Metadata = map[string]string{
-		"applicationType": "replicated.app",
-		"releaseNotes":    metadata.ReleaseNotes,
-		"customerID":      metadata.CustomerID,
-		"installationID":  metadata.InstallationID,
-		"version":         metadata.Semver,
+	versionedState.V1.Metadata = &Metadata{
+		ApplicationType: "replicated.app",
+		ReleaseNotes:    metadata.ReleaseNotes,
+		Version:         metadata.Semver,
+		CustomerID:      metadata.CustomerID,
+		InstallationID:  metadata.InstallationID,
 	}
 
 	return m.serializeAndWriteState(versionedState)
@@ -157,6 +159,21 @@ func (m *MManager) SerializeHelmValues(values string, defaults string) error {
 	return m.serializeAndWriteState(versionedState)
 }
 
+// SerializeReleaseName serializes to disk the name to use for helm template
+func (m *MManager) SerializeReleaseName(name string) error {
+	debug := level.Debug(log.With(m.Logger, "method", "serializeHelmValues"))
+
+	debug.Log("event", "tryLoadState")
+	currentState, err := m.TryLoad()
+	if err != nil {
+		return errors.Wrap(err, "try load state")
+	}
+	versionedState := currentState.Versioned()
+	versionedState.V1.ReleaseName = name
+
+	return m.serializeAndWriteState(versionedState)
+}
+
 // SerializeConfig takes the application data and input params and serializes a state file to disk
 func (m *MManager) SerializeConfig(assets []api.Asset, meta api.ReleaseMetadata, templateContext map[string]interface{}) error {
 	debug := level.Debug(log.With(m.Logger, "method", "serializeConfig"))
@@ -168,6 +185,24 @@ func (m *MManager) SerializeConfig(assets []api.Asset, meta api.ReleaseMetadata,
 	}
 	versionedState := currentState.Versioned()
 	versionedState.V1.Config = templateContext
+
+	return m.serializeAndWriteState(versionedState)
+}
+
+func (m *MManager) SerializeListsMetadata(list List) error {
+	debug := level.Debug(log.With(m.Logger, "method", "serializeListMetadata"))
+
+	debug.Log("event", "tryLoadState")
+	currentState, err := m.TryLoad()
+	if err != nil {
+		return errors.Wrap(err, "try load state")
+	}
+
+	versionedState := currentState.Versioned()
+	if versionedState.V1.Metadata == nil {
+		versionedState.V1.Metadata = &Metadata{}
+	}
+	versionedState.V1.Metadata.Lists = append(versionedState.V1.Metadata.Lists, list)
 
 	return m.serializeAndWriteState(versionedState)
 }

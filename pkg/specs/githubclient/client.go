@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -18,6 +19,12 @@ import (
 	errors2 "github.com/replicatedhq/ship/pkg/util/errors"
 	"github.com/spf13/afero"
 )
+
+type GitHubReleaseNotesFetcher interface {
+	ResolveReleaseNotes(ctx context.Context, upstream string) (string, error)
+}
+
+var _ GitHubReleaseNotesFetcher = &GithubClient{}
 
 type GithubClient struct {
 	logger log.Logger
@@ -38,33 +45,38 @@ func (g *GithubClient) GetFiles(
 	ctx context.Context,
 	upstream string,
 	destinationPath string,
-) error {
+) (string, error) {
 	debug := level.Debug(log.With(g.logger, "method", "getRepoContents"))
 
 	debug.Log("event", "validateGithubURL")
 	validatedUpstreamURL, err := validateGithubURL(upstream)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	debug.Log("event", "decodeGithubURL")
 	owner, repo, branch, repoPath, err := decodeGitHubURL(validatedUpstreamURL.Path)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	debug.Log("event", "removeAll", "destinationPath", destinationPath)
 	err = g.fs.RemoveAll(destinationPath)
 	if err != nil {
-		return errors.Wrap(err, "remove chart clone destination")
+		return "", errors.Wrap(err, "remove chart clone destination")
 	}
 
-	err = g.downloadAndExtractFiles(ctx, owner, repo, branch, repoPath, destinationPath)
+	downloadBasePath := ""
+	if filepath.Ext(repoPath) != "" {
+		downloadBasePath = repoPath
+		repoPath = ""
+	}
+	err = g.downloadAndExtractFiles(ctx, owner, repo, branch, downloadBasePath, destinationPath)
 	if err != nil {
-		return errors2.FetchFilesError{Message: err.Error()}
+		return "", errors2.FetchFilesError{Message: err.Error()}
 	}
 
-	return nil
+	return filepath.Join(destinationPath, repoPath), nil
 }
 
 func (g *GithubClient) downloadAndExtractFiles(
@@ -119,17 +131,6 @@ func (g *GithubClient) downloadAndExtractFiles(
 		}
 
 		switch header.Typeflag {
-		case tar.TypeDir:
-			dirName := strings.Join(strings.Split(header.Name, "/")[1:], "/")
-			if !strings.HasPrefix(dirName, basePath) {
-				continue
-			}
-			basePathFound = true
-
-			dirName = strings.TrimPrefix(dirName, basePath)
-			if err := g.fs.MkdirAll(filepath.Join(filePath, dirName), 0755); err != nil {
-				return errors.Wrapf(err, "extract tar gz, mkdir")
-			}
 		case tar.TypeReg:
 			// need this in a func because defer in a loop was leaking handles
 			err := func() error {
@@ -139,7 +140,13 @@ func (g *GithubClient) downloadAndExtractFiles(
 				}
 				basePathFound = true
 
-				fileName = strings.TrimPrefix(fileName, basePath)
+				if fileName != basePath {
+					fileName = strings.TrimPrefix(fileName, basePath)
+				}
+				dirPath, _ := path.Split(fileName)
+				if err := g.fs.MkdirAll(filepath.Join(filePath, dirPath), 0755); err != nil {
+					return errors.Wrapf(err, "extract tar gz, mkdir")
+				}
 				outFile, err := g.fs.Create(filepath.Join(filePath, fileName))
 				if err != nil {
 					return errors.Wrapf(err, "extract tar gz, create")
@@ -171,7 +178,7 @@ func decodeGitHubURL(chartPath string) (owner string, repo string, branch string
 	branch = ""
 	path = ""
 	if len(splitPath) > 3 {
-		if splitPath[3] == "tree" {
+		if splitPath[3] == "tree" || splitPath[3] == "blob" {
 			branch = splitPath[4]
 			path = strings.Join(splitPath[5:], "/")
 		} else {

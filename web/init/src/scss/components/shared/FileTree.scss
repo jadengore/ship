@@ -54,7 +54,7 @@
 .FileTree-wrapper ul {
   padding-top: 4px;
 }
-.FileTree-wrapper label, 
+.FileTree-wrapper label,
 .FileTree-wrapper li {
   color: rgba(255,255,255,0.8);
   font-weight: 500;
@@ -68,6 +68,23 @@
   &:hover {
     color: #ffffff;
     cursor: pointer;
+  }
+}
+
+.FileTree-wrapper li.is-file.is-excluded {
+  text-decoration: line-through;
+}
+
+.FileTree-wrapper li.is-file.is-base {
+  span.u-deleteOverlayIcon {
+    opacity: 0;
+    pointer-events: none;
+  }
+  &:hover {
+    span.u-deleteOverlayIcon {
+      pointer-events: all;
+      opacity: 1;
+    }
   }
 }
 

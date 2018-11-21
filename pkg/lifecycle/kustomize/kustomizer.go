@@ -18,6 +18,7 @@ import (
 	"github.com/replicatedhq/ship/pkg/state"
 	"github.com/spf13/afero"
 	"gopkg.in/yaml.v2"
+	"sigs.k8s.io/kustomize/pkg/patch"
 	ktypes "sigs.k8s.io/kustomize/pkg/types"
 )
 
@@ -45,73 +46,13 @@ type daemonkustomizer struct {
 }
 
 func (l *daemonkustomizer) Execute(ctx context.Context, release *api.Release, step api.Kustomize) error {
-	debug := level.Debug(log.With(l.Logger, "struct", "kustomizer", "method", "execute"))
-
 	daemonExitedChan := l.Daemon.EnsureStarted(ctx, release)
-
-	debug.Log("event", "daemon.started")
-
-	l.Daemon.PushKustomizeStep(ctx, daemontypes.Kustomize{
-		BasePath: step.Base,
-	})
-	debug.Log("event", "step.pushed")
-
-	if err := l.writeBase(step); err != nil {
-		return errors.Wrap(err, "write base kustomization")
-	}
-
 	err := l.awaitKustomizeSaved(ctx, daemonExitedChan)
-	debug.Log("event", "kustomize.saved", "err", err)
 	if err != nil {
-		return errors.Wrap(err, "await save kustomize")
+		return errors.Wrap(err, "ensure daemon \"started\"")
 	}
 
-	current, err := l.State.TryLoad()
-	if err != nil {
-		return errors.Wrap(err, "load state")
-	}
-
-	debug.Log("event", "state.loaded")
-	kustomizeState := current.CurrentKustomize()
-
-	var shipOverlay state.Overlay
-	if kustomizeState == nil {
-		debug.Log("event", "state.kustomize.empty")
-	} else {
-		shipOverlay = kustomizeState.Ship()
-	}
-
-	fs, err := l.getPotentiallyChrootedFs(release)
-	if err != nil {
-		return errors.Wrap(err, "get base fs for writing kustomize")
-	}
-
-	debug.Log("event", "mkdir", "dir", step.OverlayPath())
-	err = fs.MkdirAll(step.OverlayPath(), 0777)
-	if err != nil {
-		debug.Log("event", "mkdir.fail", "dir", step.OverlayPath())
-		return errors.Wrapf(err, "make dir %s", step.OverlayPath())
-	}
-
-	relativePatchPaths, err := l.writePatches(fs, shipOverlay, step.OverlayPath())
-	if err != nil {
-		return err
-	}
-
-	err = l.writeOverlay(fs, step, relativePatchPaths)
-	if err != nil {
-		return errors.Wrap(err, "write overlay")
-	}
-
-	if step.Dest != "" {
-		debug.Log("event", "kustomize.build", "dest", step.Dest)
-		err = l.kustomizeBuild(fs, step)
-		if err != nil {
-			return errors.Wrap(err, "build overlay")
-		}
-	}
-
-	return nil
+	return l.Kustomizer.Execute(ctx, release, step)
 }
 
 // hack -- get the root path off a render step to tell if we should prefix kustomize outputs
@@ -155,40 +96,60 @@ func (l *daemonkustomizer) awaitKustomizeSaved(ctx context.Context, daemonExited
 	}
 }
 
-func (l *Kustomizer) writePatches(fs afero.Afero, shipOverlay state.Overlay, destDir string) (relativePatchPaths []string, err error) {
-	debug := level.Debug(log.With(l.Logger, "method", "writePatches"))
+func (l *Kustomizer) writePatches(
+	fs afero.Afero,
+	shipOverlay state.Overlay,
+	destDir string,
+) (relativePatchPaths []patch.PatchStrategicMerge, err error) {
+	patches, err := l.writeFileMap(fs, shipOverlay.Patches, destDir)
+	if err != nil {
+		return nil, errors.Wrapf(err, "write file map to %s", destDir)
+	}
+	for _, p := range patches {
+		relativePatchPaths = append(relativePatchPaths, patch.PatchStrategicMerge(p))
+	}
+	return
+}
 
-	for file, contents := range shipOverlay.Patches {
+func (l *Kustomizer) writeResources(fs afero.Afero, shipOverlay state.Overlay, destDir string) (relativeResourcePaths []string, err error) {
+	return l.writeFileMap(fs, shipOverlay.Resources, destDir)
+}
+
+func (l *Kustomizer) writeFileMap(fs afero.Afero, files map[string]string, destDir string) (paths []string, err error) {
+	debug := level.Debug(log.With(l.Logger, "method", "writeResources"))
+
+	for file, contents := range files {
 		name := path.Join(destDir, file)
-		err := l.writePatch(fs, name, contents)
+		err := l.writeFile(fs, name, contents)
 		if err != nil {
 			debug.Log("event", "write", "name", name)
-			return []string{}, errors.Wrapf(err, "write %s", name)
+			return []string{}, errors.Wrapf(err, "write resource %s", name)
 		}
 
 		relativePatchPath, err := filepath.Rel(destDir, name)
 		if err != nil {
 			return []string{}, errors.Wrap(err, "unable to determine relative path")
 		}
-		relativePatchPaths = append(relativePatchPaths, relativePatchPath)
+		paths = append(paths, relativePatchPath)
 	}
-	return relativePatchPaths, nil
+	return paths, nil
+
 }
 
-func (l *Kustomizer) writePatch(fs afero.Afero, name string, contents string) error {
-	debug := level.Debug(log.With(l.Logger, "method", "writePatch"))
+func (l *Kustomizer) writeFile(fs afero.Afero, name string, contents string) error {
+	debug := level.Debug(log.With(l.Logger, "method", "writeFile"))
 
 	destDir := filepath.Dir(name)
 
 	// make the dir
-	err := fs.MkdirAll(destDir, 0777)
+	err := l.FS.MkdirAll(destDir, 0777)
 	if err != nil {
 		debug.Log("event", "mkdir.fail", "dir", destDir)
 		return errors.Wrapf(err, "make dir %s", destDir)
 	}
 
 	// write the file
-	err = fs.WriteFile(name, []byte(contents), 0666)
+	err = l.FS.WriteFile(name, []byte(contents), 0666)
 	if err != nil {
 		return errors.Wrapf(err, "write patch %s", name)
 	}
@@ -196,13 +157,18 @@ func (l *Kustomizer) writePatch(fs afero.Afero, name string, contents string) er
 	return nil
 }
 
-func (l *Kustomizer) writeOverlay(fs afero.Afero, step api.Kustomize, relativePatchPaths []string) error {
+func (l *Kustomizer) writeOverlay(
+	step api.Kustomize,
+	relativePatchPaths []patch.PatchStrategicMerge,
+	relativeResourcePaths []string,
+) error {
 	// just always make a new kustomization.yaml for now
 	kustomization := ktypes.Kustomization{
 		Bases: []string{
 			filepath.Join("../../", step.Base),
 		},
-		Patches: relativePatchPaths,
+		PatchesStrategicMerge: relativePatchPaths,
+		Resources:             relativeResourcePaths,
 	}
 
 	marshalled, err := yaml.Marshal(kustomization)
@@ -211,7 +177,7 @@ func (l *Kustomizer) writeOverlay(fs afero.Afero, step api.Kustomize, relativePa
 	}
 
 	name := path.Join(step.OverlayPath(), "kustomization.yaml")
-	err = fs.WriteFile(name, []byte(marshalled), 0666)
+	err = l.FS.WriteFile(name, []byte(marshalled), 0666)
 	if err != nil {
 		return errors.Wrapf(err, "write file %s", name)
 	}
@@ -222,6 +188,17 @@ func (l *Kustomizer) writeOverlay(fs afero.Afero, step api.Kustomize, relativePa
 func (l *Kustomizer) writeBase(step api.Kustomize) error {
 	debug := level.Debug(log.With(l.Logger, "method", "writeBase"))
 
+	currentState, err := l.State.TryLoad()
+	if err != nil {
+		return errors.Wrap(err, "load state")
+	}
+
+	currentKustomize := currentState.CurrentKustomize()
+	if currentKustomize == nil {
+		currentKustomize = &state.Kustomize{}
+	}
+	shipOverlay := currentKustomize.Ship()
+
 	baseKustomization := ktypes.Kustomization{}
 	if err := l.FS.Walk(
 		step.Base,
@@ -230,12 +207,12 @@ func (l *Kustomizer) writeBase(step api.Kustomize) error {
 				debug.Log("event", "walk.fail", "path", targetPath)
 				return errors.Wrap(err, "failed to walk path")
 			}
-			if l.shouldAddFile(targetPath) {
-				relativePath, err := filepath.Rel(step.Base, targetPath)
-				if err != nil {
-					debug.Log("event", "relativepath.fail", "base", step.Base, "target", targetPath)
-					return errors.Wrap(err, "failed to get relative path")
-				}
+			relativePath, err := filepath.Rel(step.Base, targetPath)
+			if err != nil {
+				debug.Log("event", "relativepath.fail", "base", step.Base, "target", targetPath)
+				return errors.Wrap(err, "failed to get relative path")
+			}
+			if l.shouldAddFileToBase(shipOverlay.ExcludedBases, relativePath) {
 				baseKustomization.Resources = append(baseKustomization.Resources, relativePath)
 			}
 			return nil
@@ -262,9 +239,19 @@ func (l *Kustomizer) writeBase(step api.Kustomize) error {
 	return nil
 }
 
-func (l *Kustomizer) shouldAddFile(targetPath string) bool {
-	return filepath.Ext(targetPath) == ".yaml" &&
-		!strings.HasSuffix(targetPath, "kustomization.yaml") &&
+func (l *Kustomizer) shouldAddFileToBase(excludedBases []string, targetPath string) bool {
+	if filepath.Ext(targetPath) != ".yaml" && filepath.Ext(targetPath) != ".yml" {
+		return false
+	}
+
+	for _, base := range excludedBases {
+		basePathWOLeading := strings.TrimPrefix(base, "/")
+		if basePathWOLeading == targetPath {
+			return false
+		}
+	}
+
+	return !strings.HasSuffix(targetPath, "kustomization.yaml") &&
 		!strings.HasSuffix(targetPath, "Chart.yaml") &&
 		!strings.HasSuffix(targetPath, "values.yaml")
 }

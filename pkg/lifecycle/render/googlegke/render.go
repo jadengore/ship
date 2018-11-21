@@ -155,8 +155,15 @@ func renderTerraformContents(asset api.GKEAsset) (string, error) {
 }
 
 func executeTemplate(t *template.Template, asset api.GKEAsset) (string, error) {
+	var data = struct {
+		api.GKEAsset
+		KubeConfigTmpl string
+	}{
+		asset,
+		kubeConfigTmpl,
+	}
 	var tpl bytes.Buffer
-	if err := t.Execute(&tpl, asset); err != nil {
+	if err := t.Execute(&tpl, data); err != nil {
 		return "", err
 	}
 

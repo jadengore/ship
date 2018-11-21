@@ -19,13 +19,14 @@ import (
 )
 
 type TestMetadata struct {
-	CustomerID     string `yaml:"customer_id"`
-	InstallationID string `yaml:"installation_id"`
-	ReleaseVersion string `yaml:"release_version"`
-	SetChannelName string `yaml:"set_channel_name"`
-	Flavor         string `yaml:"flavor"`
-	DisableOnline  bool   `yaml:"disable_online"`
-	NoStateFile    bool   `yaml:"no_state_file"` // used to denote that there is no input state.json
+	CustomerID          string `yaml:"customer_id"`
+	InstallationID      string `yaml:"installation_id"`
+	ReleaseVersion      string `yaml:"release_version"`
+	SetChannelName      string `yaml:"set_channel_name"`
+	SetGitHubContents   string `yaml:"set_github_contents"`
+	DisableOnline       bool   `yaml:"disable_online"`
+	NoStateFile         bool   `yaml:"no_state_file"` // used to denote that there is no input state.json
+	SetEntitlementsJSON string `yaml:"set_entitlements_json"`
 	//debugging
 	SkipCleanup bool `yaml:"skip_cleanup"`
 }
@@ -93,18 +94,24 @@ var _ = Describe("ship app", func() {
 						fmt.Sprintf("--installation-id=%s", testMetadata.InstallationID),
 						fmt.Sprintf("--set-channel-name=%s", testMetadata.SetChannelName),
 						fmt.Sprintf("--release-semver=%s", testMetadata.ReleaseVersion),
+						fmt.Sprintf("--set-github-contents=%s", testMetadata.SetGitHubContents),
 						"--log-level=off",
 						"--terraform-yes",
 					}
 					if !testMetadata.NoStateFile {
 						args = append(args, fmt.Sprintf("--state-file=%s", path.Join(testInputPath, ".ship/state.json")))
 					}
+
+					if testMetadata.SetEntitlementsJSON != "" {
+						args = append(args, fmt.Sprintf("--set-entitlements-json=%s", testMetadata.SetEntitlementsJSON))
+					}
+
 					cmd.SetArgs(args)
 					err := cmd.Execute()
 					Expect(err).NotTo(HaveOccurred())
 
 					//compare the files in the temporary directory with those in the "expected" directory
-					result, err := integration.CompareDir(path.Join(testPath, "expected"), testOutputPath)
+					result, err := integration.CompareDir(path.Join(testPath, "expected"), testOutputPath, map[string]string{})
 					Expect(err).NotTo(HaveOccurred())
 					Expect(result).To(BeTrue())
 				}, 60)
@@ -134,7 +141,7 @@ var _ = Describe("ship app", func() {
 					Expect(err).NotTo(HaveOccurred())
 
 					//compare the files in the temporary directory with those in the "expected" directory
-					result, err := integration.CompareDir(path.Join(testPath, "expected"), testOutputPath)
+					result, err := integration.CompareDir(path.Join(testPath, "expected"), testOutputPath, map[string]string{})
 					Expect(err).NotTo(HaveOccurred())
 					Expect(result).To(BeTrue())
 				}, 60)

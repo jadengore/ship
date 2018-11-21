@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -45,6 +46,7 @@ type NavcycleRoutes struct {
 	ConfigSaved        chan interface{}
 	TerraformConfirmed chan bool
 	CurrentConfig      map[string]interface{}
+	PreExecuteFuncMap  map[string]preExecuteFunc
 
 	KubectlConfirmed chan bool
 
@@ -66,7 +68,10 @@ func (d *NavcycleRoutes) Register(group *gin.RouterGroup, release *api.Release) 
 	kustom.POST("save", d.kustomizeSaveOverlay)
 	kustom.POST("finalize", d.kustomizeFinalize)
 	kustom.POST("patch", d.createOrMergePatch)
+	kustom.POST("include", d.includeBase)
 	kustom.DELETE("patch", d.deletePatch)
+	kustom.DELETE("resource", d.deleteResource)
+	kustom.DELETE("base", d.deleteBase)
 	kustom.POST("apply", d.applyPatch)
 
 	conf := v1.Group("/config")
@@ -80,6 +85,18 @@ func (d *NavcycleRoutes) Register(group *gin.RouterGroup, release *api.Release) 
 
 	kube := v1.Group("/kubectl")
 	kube.POST("confirm", d.kubectlConfirm)
+
+	d.registerPreExecuteFuncs()
+}
+
+type preExecuteFunc func(context.Context, api.Step) error
+
+func (d *NavcycleRoutes) registerPreExecuteFuncs() {
+	preExecuteFuncMap := make(map[string]preExecuteFunc)
+
+	// TODO(robert): steps should register preExecute funcs by id
+	preExecuteFuncMap["kustomize"] = d.Kustomizer.PreExecute
+	d.PreExecuteFuncMap = preExecuteFuncMap
 }
 
 func (d *NavcycleRoutes) shutdown(c *gin.Context) {

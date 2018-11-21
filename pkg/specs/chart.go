@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
@@ -14,13 +15,13 @@ import (
 	"github.com/replicatedhq/libyaml"
 	"github.com/replicatedhq/ship/pkg/api"
 	"github.com/replicatedhq/ship/pkg/constants"
-	"github.com/replicatedhq/ship/pkg/specs/githubclient"
+	"github.com/replicatedhq/ship/pkg/state"
 	"github.com/replicatedhq/ship/pkg/util"
 	"gopkg.in/yaml.v2"
 )
 
-func DefaultHelmRelease(chartPath string) api.Spec {
-	return api.Spec{
+func (r *Resolver) DefaultHelmRelease(chartPath string) api.Spec {
+	spec := api.Spec{
 		Assets: api.Assets{
 			V1: []api.Asset{
 				{
@@ -42,6 +43,7 @@ func DefaultHelmRelease(chartPath string) api.Spec {
 			V1: []api.Step{
 				{
 					HelmIntro: &api.HelmIntro{
+						IsUpdate: r.Viper.GetBool("IsUpdate"),
 						StepShared: api.StepShared{
 							ID: "intro",
 						},
@@ -83,27 +85,41 @@ func DefaultHelmRelease(chartPath string) api.Spec {
 						Dest: "rendered.yaml",
 					},
 				},
-				{
-					Message: &api.Message{
-						StepShared: api.StepShared{
-							ID:       "outro",
-							Requires: []string{"kustomize"},
-						},
-						Contents: `
-Assets are ready to deploy. You can run
-
-    kubectl apply -f rendered.yaml
-
-to deploy the overlaid assets to your cluster.
-`},
-				},
 			},
 		},
 	}
+	if !r.NoOutro {
+		spec.Lifecycle.V1 = append(spec.Lifecycle.V1, api.Step{
+			Message: &api.Message{
+				StepShared: api.StepShared{
+					ID:       "outro",
+					Requires: []string{"kustomize"},
+				},
+				Contents: `
+## Deploy
+
+The application is ready to be deployed. To deploy it now, you can run:
+
+	kubectl apply -f rendered.yaml
+
+## Updates
+
+Ship can now watch for any changes made to the application, and can download them, apply your patches, and create an updated version of the rendered.yaml. To watch for updates:
+
+	ship watch && ship update
+
+Running this command in the current directory will automate the process of downloading and preparing updates.
+
+For continuous notification and preparation of application updates via email, webhook or automated pull request, create a free account at https://ship.replicated.com.
+`},
+		})
+	}
+
+	return spec
 }
 
-func DefaultRawRelease(basePath string) api.Spec {
-	return api.Spec{
+func (r *Resolver) DefaultRawRelease(basePath string) api.Spec {
+	spec := api.Spec{
 		Assets: api.Assets{
 			V1: []api.Asset{},
 		},
@@ -112,6 +128,14 @@ func DefaultRawRelease(basePath string) api.Spec {
 		},
 		Lifecycle: api.Lifecycle{
 			V1: []api.Step{
+				{
+					Render: &api.Render{
+						StepShared: api.StepShared{
+							ID: "render",
+						},
+						Root: ".",
+					},
+				},
 				{
 					KustomizeIntro: &api.KustomizeIntro{
 						StepShared: api.StepShared{
@@ -130,22 +154,36 @@ func DefaultRawRelease(basePath string) api.Spec {
 						Dest: "rendered.yaml",
 					},
 				},
-				{
-					Message: &api.Message{
-						StepShared: api.StepShared{
-							ID: "outro",
-						},
-						Contents: `
-Assets are ready to deploy. You can run
-
-    kubectl apply -f rendered.yaml
-
-to deploy the overlaid assets to your cluster.
-						`},
-				},
 			},
 		},
 	}
+	if !r.NoOutro {
+		spec.Lifecycle.V1 = append(spec.Lifecycle.V1, api.Step{
+			Message: &api.Message{
+				StepShared: api.StepShared{
+					ID:       "outro",
+					Requires: []string{"kustomize"},
+				},
+				Contents: `
+## Deploy
+
+The application is ready to be deployed. To deploy it now, you can run:
+
+	kubectl apply -f rendered.yaml
+
+## Updates
+
+Ship can now watch for any changes made to the application, and can download them, apply your patches, and create an updated version of the rendered.yaml. To watch for updates:
+
+  	ship watch && ship update
+
+Running this command in the current directory will automate the process of downloading and preparing updates.
+
+For continuous notification and preparation of application updates via email, webhook or automated pull request, create a free account at https://ship.replicated.com.
+`},
+		})
+	}
+	return spec
 }
 
 func (r *Resolver) resolveMetadata(ctx context.Context, upstream, localPath string, applicationType string) (*api.ShipAppMetadata, error) {
@@ -157,10 +195,9 @@ func (r *Resolver) resolveMetadata(ctx context.Context, upstream, localPath stri
 	}
 
 	if util.IsGithubURL(upstream) {
-		githubClient := githubclient.NewGithubClient(r.FS, r.Logger)
-		releaseNotes, err := githubClient.ResolveReleaseNotes(ctx, upstream)
+		releaseNotes, err := r.GitHubReleaseNotesFetcher.ResolveReleaseNotes(ctx, upstream)
 		if err != nil {
-			debug.Log("could not resolve release notes from %s", upstream)
+			debug.Log("event", "releaseNotes.resolve.fail", "upstream", upstream, "err", err)
 		}
 		baseMetadata.ReleaseNotes = releaseNotes
 	}
@@ -296,4 +333,82 @@ func (r *Resolver) calculateContentSHA(root string) (string, error) {
 	}
 
 	return fmt.Sprintf("%x", sha256.Sum256(contents)), nil
+}
+
+// this function is not perfect, and has known limitations. One of these is that it does not account for `\n---\n` in multiline strings.
+func (r *Resolver) maybeSplitMultidocYaml(ctx context.Context, localPath string) error {
+	type outputYaml struct {
+		name     string
+		contents string
+	}
+
+	files, err := r.FS.ReadDir(localPath)
+	if err != nil {
+		return errors.Wrapf(err, "read files in %s", localPath)
+	}
+
+	if len(files) != 1 {
+		// if there's more than one file, we'll assume that it does not need to be split
+		// if there are no files, there's nothing to do
+		return nil
+	}
+
+	file := files[0]
+
+	if file.IsDir() {
+		// if the single file is a directory, obviously we can't split it
+		return nil
+	}
+
+	if filepath.Ext(file.Name()) != ".yaml" && filepath.Ext(file.Name()) != ".yml" {
+		// not yaml, nothing to do
+		return nil
+	}
+
+	inFileBytes, err := r.FS.ReadFile(filepath.Join(localPath, file.Name()))
+	if err != nil {
+		return errors.Wrapf(err, "read %s", filepath.Join(localPath, file.Name()))
+	}
+
+	outputFiles := []outputYaml{}
+	filesStrings := strings.Split(string(inFileBytes), "\n---\n")
+
+	// generate replacement yaml files
+	for idx, fileString := range filesStrings {
+
+		thisOutputFile := outputYaml{contents: fileString}
+
+		thisMetadata := state.MinimalK8sYaml{}
+		_ = yaml.Unmarshal([]byte(fileString), &thisMetadata)
+
+		if thisMetadata.Kind == "" {
+			// not a valid k8s yaml
+			continue
+		}
+
+		fileName := util.GenerateNameFromMetadata(thisMetadata, idx)
+		thisOutputFile.name = fileName
+		outputFiles = append(outputFiles, thisOutputFile)
+	}
+
+	if len(outputFiles) < 2 {
+		// not a multidoc yaml, or at least not a multidoc kubernetes yaml
+		return nil
+	}
+
+	// delete multidoc yaml file
+	err = r.FS.Remove(filepath.Join(localPath, file.Name()))
+	if err != nil {
+		return errors.Wrapf(err, "unable to remove %s", filepath.Join(localPath, file.Name()))
+	}
+
+	// write replacement yaml
+	for _, outputFile := range outputFiles {
+		err = r.FS.WriteFile(filepath.Join(localPath, outputFile.name+".yaml"), []byte(outputFile.contents), os.FileMode(0644))
+		if err != nil {
+			return errors.Wrapf(err, "write %s", outputFile.name)
+		}
+	}
+
+	return nil
 }

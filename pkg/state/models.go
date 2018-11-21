@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/hashicorp/terraform/terraform"
 	"github.com/replicatedhq/ship/pkg/api"
 )
 
@@ -11,9 +12,10 @@ import (
 type State interface {
 	CurrentConfig() map[string]interface{}
 	CurrentKustomize() *Kustomize
-	CurrentKustomizeOverlay(filename string) string
+	CurrentKustomizeOverlay(filename string) (string, bool)
 	CurrentHelmValues() string
 	CurrentHelmValuesDefaults() string
+	CurrentReleaseName() string
 	Upstream() string
 	Versioned() VersionedState
 	IsEmpty() bool
@@ -25,25 +27,27 @@ var _ State = V0{}
 
 type Empty struct{}
 
-func (Empty) CurrentKustomize() *Kustomize          { return nil }
-func (Empty) CurrentKustomizeOverlay(string) string { return "" }
-func (Empty) CurrentConfig() map[string]interface{} { return make(map[string]interface{}) }
-func (Empty) CurrentHelmValues() string             { return "" }
-func (Empty) CurrentHelmValuesDefaults() string     { return "" }
-func (Empty) Upstream() string                      { return "" }
-func (Empty) Versioned() VersionedState             { return VersionedState{V1: &V1{}} }
-func (Empty) IsEmpty() bool                         { return true }
+func (Empty) CurrentKustomize() *Kustomize                  { return nil }
+func (Empty) CurrentKustomizeOverlay(string) (string, bool) { return "", false }
+func (Empty) CurrentConfig() map[string]interface{}         { return make(map[string]interface{}) }
+func (Empty) CurrentHelmValues() string                     { return "" }
+func (Empty) CurrentHelmValuesDefaults() string             { return "" }
+func (Empty) CurrentReleaseName() string                    { return "" }
+func (Empty) Upstream() string                              { return "" }
+func (Empty) Versioned() VersionedState                     { return VersionedState{V1: &V1{}} }
+func (Empty) IsEmpty() bool                                 { return true }
 
 type V0 map[string]interface{}
 
-func (v V0) CurrentConfig() map[string]interface{} { return v }
-func (v V0) CurrentKustomize() *Kustomize          { return nil }
-func (v V0) CurrentKustomizeOverlay(string) string { return "" }
-func (v V0) CurrentHelmValues() string             { return "" }
-func (v V0) CurrentHelmValuesDefaults() string     { return "" }
-func (v V0) Upstream() string                      { return "" }
-func (v V0) Versioned() VersionedState             { return VersionedState{V1: &V1{Config: v}} }
-func (v V0) IsEmpty() bool                         { return false }
+func (v V0) CurrentConfig() map[string]interface{}         { return v }
+func (v V0) CurrentKustomize() *Kustomize                  { return nil }
+func (v V0) CurrentKustomizeOverlay(string) (string, bool) { return "", false }
+func (v V0) CurrentHelmValues() string                     { return "" }
+func (v V0) CurrentHelmValuesDefaults() string             { return "" }
+func (v V0) CurrentReleaseName() string                    { return "" }
+func (v V0) Upstream() string                              { return "" }
+func (v V0) Versioned() VersionedState                     { return VersionedState{V1: &V1{Config: v}} }
+func (v V0) IsEmpty() bool                                 { return false }
 
 type VersionedState struct {
 	V1 *V1 `json:"v1,omitempty" yaml:"v1,omitempty" hcl:"v1,omitempty"`
@@ -55,18 +59,46 @@ func (v VersionedState) IsEmpty() bool {
 
 type V1 struct {
 	Config             map[string]interface{} `json:"config" yaml:"config" hcl:"config"`
-	Terraform          interface{}            `json:"terraform,omitempty" yaml:"terraform,omitempty" hcl:"terraform,omitempty"`
+	Terraform          *Terraform             `json:"terraform,omitempty" yaml:"terraform,omitempty" hcl:"terraform,omitempty"`
 	HelmValues         string                 `json:"helmValues,omitempty" yaml:"helmValues,omitempty" hcl:"helmValues,omitempty"`
+	ReleaseName        string                 `json:"releaseName,omitempty" yaml:"releaseName,omitempty" hcl:"releaseName,omitempty"`
 	HelmValuesDefaults string                 `json:"helmValuesDefaults,omitempty" yaml:"helmValuesDefaults,omitempty" hcl:"helmValuesDefaults,omitempty"`
 	Kustomize          *Kustomize             `json:"kustomize,omitempty" yaml:"kustomize,omitempty" hcl:"kustomize,omitempty"`
 	Upstream           string                 `json:"upstream,omitempty" yaml:"upstream,omitempty" hcl:"upstream,omitempty"`
-	Metadata           map[string]string      `json:"metadata" yaml:"metadata" hcl:"metadata"`
+	Metadata           *Metadata              `json:"metadata" yaml:"metadata" hcl:"metadata"`
 	//deprecated in favor of upstream
 	ChartURL     string    `json:"chartURL,omitempty" yaml:"chartURL,omitempty" hcl:"chartURL,omitempty"`
 	ChartRepoURL string    `json:"ChartRepoURL,omitempty" yaml:"ChartRepoURL,omitempty" hcl:"ChartRepoURL,omitempty"`
 	ChartVersion string    `json:"ChartVersion,omitempty" yaml:"ChartVersion,omitempty" hcl:"ChartVersion,omitempty"`
 	ContentSHA   string    `json:"contentSHA,omitempty" yaml:"contentSHA,omitempty" hcl:"contentSHA,omitempty"`
 	Lifecycle    *Lifeycle `json:"lifecycle,omitempty" yaml:"lifecycle,omitempty" hcl:"lifecycle,omitempty"`
+}
+
+type Metadata struct {
+	ApplicationType string `json:"applicationType" yaml:"applicationType" hcl:"applicationType"`
+	Icon            string `json:"icon,omitempty" yaml:"icon,omitempty" hcl:"icon,omitempty"`
+	Name            string `json:"name,omitempty" yaml:"name,omitempty" hcl:"name,omitempty"`
+	ReleaseNotes    string `json:"releaseNotes" yaml:"releaseNotes" hcl:"releaseNotes"`
+	Version         string `json:"version" yaml:"version" hcl:"version"`
+	CustomerID      string `json:"customerID,omitempty" yaml:"customerID,omitempty" hcl:"customerID,omitempty"`
+	InstallationID  string `json:"installationID,omitempty" yaml:"installationID,omitempty" hcl:"installationID,omitempty"`
+	Lists           []List `json:"lists,omitempty" yaml:"lists,omitempty" hcl:"lists,omitempty"`
+}
+
+type List struct {
+	APIVersion string           `json:"apiVersion" yaml:"apiVersion"`
+	Path       string           `json:"path" yaml:"path"`
+	Items      []MinimalK8sYaml `json:"items" yaml:"items"`
+}
+
+type MinimalK8sYaml struct {
+	Kind     string             `json:"kind" yaml:"kind" hcl:"kind"`
+	Metadata MinimalK8sMetadata `json:"metadata" yaml:"metadata" hcl:"metadata"`
+}
+
+type MinimalK8sMetadata struct {
+	Name      string `json:"name" yaml:"name" hcl:"name"`
+	Namespace string `json:"namespace" yaml:"namespace" hcl:"namespace"`
 }
 
 type StepsCompleted map[string]interface{}
@@ -98,8 +130,18 @@ func (l *Lifeycle) WithCompletedStep(step api.Step) *Lifeycle {
 }
 
 type Overlay struct {
+	ExcludedBases     []string          `json:"excludedBases,omitempty" yaml:"excludedBases,omitempty" hcl:"excludedBases,omitempty"`
 	Patches           map[string]string `json:"patches,omitempty" yaml:"patches,omitempty" hcl:"patches,omitempty"`
+	Resources         map[string]string `json:"resources,omitempty" yaml:"resources,omitempty" hcl:"resources,omitempty"`
 	KustomizationYAML string            `json:"kustomization_yaml,omitempty" yaml:"kustomization_yaml,omitempty" hcl:"kustomization_yaml,omitempty"`
+}
+
+func NewOverlay() Overlay {
+	return Overlay{
+		ExcludedBases: []string{},
+		Patches:       map[string]string{},
+		Resources:     map[string]string{},
+	}
 }
 
 type Kustomize struct {
@@ -108,13 +150,13 @@ type Kustomize struct {
 
 func (k *Kustomize) Ship() Overlay {
 	if k.Overlays == nil {
-		return Overlay{}
+		return NewOverlay()
 	}
 	if ship, ok := k.Overlays["ship"]; ok {
 		return ship
 	}
 
-	return Overlay{}
+	return NewOverlay()
 }
 
 func (v VersionedState) CurrentKustomize() *Kustomize {
@@ -124,30 +166,39 @@ func (v VersionedState) CurrentKustomize() *Kustomize {
 	return nil
 }
 
-func (v VersionedState) CurrentKustomizeOverlay(filename string) string {
+func (v VersionedState) CurrentKustomizeOverlay(filename string) (contents string, isResource bool) {
 	if v.V1.Kustomize == nil {
-		return ""
+		return
 	}
 
 	if v.V1.Kustomize.Overlays == nil {
-		return ""
+		return
 	}
 
 	overlay, ok := v.V1.Kustomize.Overlays["ship"]
 	if !ok {
-		return ""
+		return
 	}
 
-	if overlay.Patches == nil {
-		return ""
+	if overlay.Patches != nil {
+		file, ok := overlay.Patches[filename]
+		if ok {
+			return file, false
+		}
 	}
 
-	file, ok := overlay.Patches[filename]
-	if ok {
-		return file
+	if overlay.Resources != nil {
+		file, ok := overlay.Resources[filename]
+		if ok {
+			return file, true
+		}
 	}
+	return
+}
 
-	return ""
+type Terraform struct {
+	RawState string           `json:"rawState,omitempty" yaml:"rawState,omitempty" hcl:"rawState,omitempty"`
+	State    *terraform.State `json:"state,omitempty" yaml:"state,omitempty" hcl:"state,omitempty"`
 }
 
 func (v VersionedState) CurrentConfig() map[string]interface{} {
@@ -167,6 +218,13 @@ func (v VersionedState) CurrentHelmValues() string {
 func (v VersionedState) CurrentHelmValuesDefaults() string {
 	if v.V1 != nil {
 		return v.V1.HelmValuesDefaults
+	}
+	return ""
+}
+
+func (v VersionedState) CurrentReleaseName() string {
+	if v.V1 != nil {
+		return v.V1.ReleaseName
 	}
 	return ""
 }

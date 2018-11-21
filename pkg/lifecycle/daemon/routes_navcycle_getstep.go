@@ -1,8 +1,8 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
-
 	"path"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +25,16 @@ func (d *NavcycleRoutes) getStep(c *gin.Context) {
 		if stepShared.ID == requestedStep {
 			if ok := d.maybeAbortDueToMissingRequirement(stepShared.Requires, c, requestedStep); !ok {
 				return
+			}
+
+			if preExecuteFunc, exists := d.PreExecuteFuncMap[step.ShortName()]; exists {
+				if err := preExecuteFunc(context.Background(), step); err != nil {
+					level.Error(d.Logger).Log("event", "preExecute.fail", "err", err)
+					return
+				}
+				// TODO(robert): need to store the progress for multiple occurrences of
+				// a step with a pre execution func
+				delete(d.PreExecuteFuncMap, step.ShortName())
 			}
 
 			d.hydrateAndSend(daemontypes.NewStep(step), c)
@@ -56,6 +66,7 @@ func (d *NavcycleRoutes) hydrateStep(step daemontypes.Step) (*daemontypes.StepRe
 	if step.HelmValues != nil {
 		userValues := currentState.CurrentHelmValues()
 		defaultValues := currentState.CurrentHelmValuesDefaults()
+		releaseName := currentState.CurrentReleaseName()
 
 		valuesFileContents, err := d.Fs.ReadFile(path.Join(constants.HelmChartPath, "values.yaml"))
 		if err != nil {
@@ -63,13 +74,14 @@ func (d *NavcycleRoutes) hydrateStep(step daemontypes.Step) (*daemontypes.StepRe
 		}
 		vendorValues := string(valuesFileContents)
 
-		mergedValues, err := helm.MergeHelmValues(defaultValues, userValues, vendorValues)
+		mergedValues, err := helm.MergeHelmValues(defaultValues, userValues, vendorValues, true)
 		if err != nil {
 			return nil, errors.Wrap(err, "merge values")
 		}
 
 		step.HelmValues.Values = mergedValues
 		step.HelmValues.DefaultValues = vendorValues
+		step.HelmValues.ReleaseName = releaseName
 	}
 
 	result := &daemontypes.StepResponse{

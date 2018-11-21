@@ -1,13 +1,9 @@
 package helm
 
 import (
+	"os"
 	"path"
 	"testing"
-
-	"github.com/replicatedhq/ship/pkg/test-mocks/helm"
-	"github.com/replicatedhq/ship/pkg/testing/matchers"
-
-	"github.com/spf13/viper"
 
 	"github.com/golang/mock/gomock"
 	"github.com/replicatedhq/libyaml"
@@ -17,9 +13,12 @@ import (
 	"github.com/replicatedhq/ship/pkg/process"
 	state2 "github.com/replicatedhq/ship/pkg/state"
 	"github.com/replicatedhq/ship/pkg/templates"
+	"github.com/replicatedhq/ship/pkg/test-mocks/helm"
 	"github.com/replicatedhq/ship/pkg/test-mocks/state"
 	"github.com/replicatedhq/ship/pkg/testing/logger"
+	"github.com/replicatedhq/ship/pkg/testing/matchers"
 	"github.com/spf13/afero"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +35,7 @@ func TestLocalTemplater(t *testing.T) {
 		expectedChannelName string
 		expectHelmOpts      *matchers.Is
 		ontemplate          func(req *require.Assertions, mockFs afero.Afero) func(chartRoot string, args []string) error
+		state               state2.VersionedState
 	}{
 		{
 			name:        "helm test proper args",
@@ -83,7 +83,7 @@ func TestLocalTemplater(t *testing.T) {
 			expectedHelmValues: []string{
 				"--set", "service.clusterIP=10.3.9.2",
 			},
-			channelName:         "1.2.3-$#(%*)@-frobnitz",
+			channelName:         "1-2-3---------frobnitz",
 			expectedChannelName: "1-2-3---------frobnitz",
 		},
 		{
@@ -98,7 +98,7 @@ func TestLocalTemplater(t *testing.T) {
 			expectedHelmValues: []string{
 				"--set", "service.clusterIP=10.3.9.2",
 			},
-			channelName:         "1.2.3-$#(%*)@-frobnitz",
+			channelName:         "1-2-3---------frobnitz",
 			expectedChannelName: "1-2-3---------frobnitz",
 		},
 	}
@@ -122,13 +122,7 @@ func TestLocalTemplater(t *testing.T) {
 				process:        process.Process{Logger: testLogger},
 			}
 
-			mockState.EXPECT().TryLoad().Return(state2.VersionedState{
-				V1: &state2.V1{
-					HelmValues: "we fake",
-				},
-			}, nil)
-
-			channelName := "Frobnitz"
+			channelName := "frobnitz"
 			expectedChannelName := "frobnitz"
 			if test.channelName != "" {
 				channelName = test.channelName
@@ -140,6 +134,13 @@ func TestLocalTemplater(t *testing.T) {
 			if test.templateContext == nil {
 				test.templateContext = map[string]interface{}{}
 			}
+
+			mockState.EXPECT().TryLoad().Return(state2.VersionedState{
+				V1: &state2.V1{
+					HelmValues:  "we fake",
+					ReleaseName: channelName,
+				},
+			}, nil)
 
 			chartRoot := "/tmp/chartroot"
 			optionAndValuesArgs := append(
@@ -155,8 +156,10 @@ func TestLocalTemplater(t *testing.T) {
 				optionAndValuesArgs...,
 			)
 
+			templateArgs = addArgIfNotPresent(templateArgs, "--namespace", "default")
+
 			mockCommands.EXPECT().Init().Return(nil)
-			mockCommands.EXPECT().DependencyUpdate(chartRoot).Return(nil)
+			mockCommands.EXPECT().MaybeDependencyUpdate(chartRoot).Return(nil)
 			if test.ontemplate != nil {
 				mockCommands.EXPECT().Template(chartRoot, templateArgs).DoAndReturn(test.ontemplate(req, mockFs))
 			} else {
@@ -260,6 +263,430 @@ func TestTryRemoveKustomizeBasePath(t *testing.T) {
 					// if dir does not exist, we expect tryRemoveKustomizeBasePath to have succeeded without err'ing
 					req.NoError(removeErr)
 				}
+			}
+		})
+	}
+}
+
+func Test_addArgIfNotPresent(t *testing.T) {
+	type args struct {
+		existingArgs []string
+		newArg       string
+		newDefault   string
+	}
+	tests := []struct {
+		name string
+		args args
+		want []string
+	}{
+		{
+			name: "empty",
+			args: args{
+				existingArgs: []string{},
+				newArg:       "--test",
+				newDefault:   "newDefault",
+			},
+			want: []string{"--test", "newDefault"},
+		},
+		{
+			name: "not present, not empty",
+			args: args{
+				existingArgs: []string{"--notTest", "notDefault"},
+				newArg:       "--test",
+				newDefault:   "newDefault",
+			},
+			want: []string{"--notTest", "notDefault", "--test", "newDefault"},
+		},
+		{
+			name: "present",
+			args: args{
+				existingArgs: []string{"--test", "notDefault"},
+				newArg:       "--test",
+				newDefault:   "newDefault",
+			},
+			want: []string{"--test", "notDefault"},
+		},
+		{
+			name: "present with others",
+			args: args{
+				existingArgs: []string{"--notTest", "notDefault", "--test", "alsoNotDefault"},
+				newArg:       "--test",
+				newDefault:   "newDefault",
+			},
+			want: []string{"--notTest", "notDefault", "--test", "alsoNotDefault"},
+		},
+		{
+			name: "present as substring",
+			args: args{
+				existingArgs: []string{"--notTest", "notDefault", "abc--test", "alsoNotDefault"},
+				newArg:       "--test",
+				newDefault:   "newDefault",
+			},
+			want: []string{"--notTest", "notDefault", "abc--test", "alsoNotDefault", "--test", "newDefault"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+
+			got := addArgIfNotPresent(tt.args.existingArgs, tt.args.newArg, tt.args.newDefault)
+
+			req.Equal(tt.want, got)
+		})
+	}
+}
+
+func Test_validateGeneratedFiles(t *testing.T) {
+
+	type file struct {
+		contents string
+		path     string
+	}
+	tests := []struct {
+		name        string
+		inputFiles  []file
+		dir         string
+		outputFiles []file
+	}{
+		{
+			name:        "no_files",
+			dir:         "",
+			inputFiles:  []file{},
+			outputFiles: []file{},
+		},
+		{
+			name: "irrelevant_files",
+			dir:  "test",
+			inputFiles: []file{
+				{
+					path:     "outside",
+					contents: `irrelevant`,
+				},
+				{
+					path: "test/inside",
+					contents: `irrelevant
+`,
+				},
+			},
+			outputFiles: []file{
+				{
+					path:     "outside",
+					contents: `irrelevant`,
+				},
+				{
+					path: "test/inside",
+					contents: `irrelevant
+`,
+				},
+			},
+		},
+		{
+			name: "relevant_args_files",
+			dir:  "test",
+			inputFiles: []file{
+				{
+					path:     "test/something.yaml",
+					contents: `  args: {}`,
+				},
+				{
+					path:     "test/missingArgs.yaml",
+					contents: `  args:`,
+				},
+				{
+					path: "test/notMissingMultilineArgs.yaml",
+					contents: `
+  args:
+    something
+  args:
+  - something`,
+				},
+				{
+					path: "test/missingMultilineArgs.yaml",
+					contents: `
+  args:
+  something:`,
+				},
+			},
+			outputFiles: []file{
+				{
+					path:     "test/something.yaml",
+					contents: `  args: {}`,
+				},
+				{
+					path:     "test/missingArgs.yaml",
+					contents: `  args: []`,
+				},
+				{
+					path: "test/notMissingMultilineArgs.yaml",
+					contents: `
+  args:
+    something
+  args:
+  - something`,
+				},
+				{
+					path: "test/missingMultilineArgs.yaml",
+					contents: `
+  args: []
+  something:`,
+				},
+			},
+		},
+		{
+			name: "relevant_env_files",
+			dir:  "test",
+			inputFiles: []file{
+				{
+					path:     "test/something.yaml",
+					contents: `  env: []`,
+				},
+				{
+					path:     "test/missingEnv.yaml",
+					contents: `  env:`,
+				},
+				{
+					path: "test/notMissingMultilineEnv.yaml",
+					contents: `
+  env:
+    something
+  env:
+  - something`,
+				},
+				{
+					path: "test/missingMultilineEnv.yaml",
+					contents: `
+  env:
+  something:`,
+				},
+			},
+			outputFiles: []file{
+				{
+					path:     "test/something.yaml",
+					contents: `  env: []`,
+				},
+				{
+					path:     "test/missingEnv.yaml",
+					contents: `  env: {}`,
+				},
+				{
+					path: "test/notMissingMultilineEnv.yaml",
+					contents: `
+  env:
+    something
+  env:
+  - something`,
+				},
+				{
+					path: "test/missingMultilineEnv.yaml",
+					contents: `
+  env: {}
+  something:`,
+				},
+			},
+		},
+		{
+			name: "relevant_value_files",
+			dir:  "test",
+			inputFiles: []file{
+				{
+					path:     "test/something.yaml",
+					contents: `  value: {}`,
+				},
+				{
+					path:     "test/missingValue.yaml",
+					contents: `  value:`,
+				},
+			},
+			outputFiles: []file{
+				{
+					path:     "test/something.yaml",
+					contents: `  value: {}`,
+				},
+				{
+					path:     "test/missingValue.yaml",
+					contents: `  value: ""`,
+				},
+			},
+		},
+		{
+			name: "blank lines",
+			dir:  "test",
+			inputFiles: []file{
+				{
+					path: "test/blank_line_env.yaml",
+					contents: `
+  env:
+
+    item
+`,
+				},
+				{
+					path: "test/blank_line_args.yaml",
+					contents: `
+  args:
+
+    item
+`,
+				},
+			},
+			outputFiles: []file{
+				{
+					path: "test/blank_line_env.yaml",
+					contents: `
+  env:
+
+    item
+`,
+				},
+				{
+					path: "test/blank_line_args.yaml",
+					contents: `
+  args:
+
+    item
+`,
+				},
+			},
+		},
+		{
+			name: "comment lines",
+			dir:  "test",
+			inputFiles: []file{
+				{
+					path: "test/comment_line_env.yaml",
+					contents: `
+  env:
+    #item
+
+  env:
+  #item
+    item2
+`,
+				},
+				{
+					path: "test/comment_line_args.yaml",
+					contents: `
+  args:
+    #item
+
+  args:
+  #item
+    item2
+`,
+				},
+			},
+			outputFiles: []file{
+				{
+					path: "test/comment_line_env.yaml",
+					contents: `
+  env: {}
+    #item
+
+  env:
+  #item
+    item2
+`,
+				},
+				{
+					path: "test/comment_line_args.yaml",
+					contents: `
+  args: []
+    #item
+
+  args:
+  #item
+    item2
+`,
+				},
+			},
+		},
+		{
+			name: "null values",
+			dir:  "test",
+			inputFiles: []file{
+				{
+					path: "test/null_values.yaml",
+					contents: `
+  value: null
+    #item
+
+  value:
+    null
+
+  value:
+    value: null
+`,
+				},
+			},
+			outputFiles: []file{
+				{
+					path: "test/null_values.yaml",
+					contents: `
+  value: ""
+    #item
+
+  value:
+    null
+
+  value:
+    value: ""
+`,
+				},
+			},
+		},
+		{
+			name: "everything",
+			dir:  "test",
+			inputFiles: []file{
+				{
+					path: "test/everything.yaml",
+					contents: `
+  args:
+  env:
+  volumes:
+  value:
+  value: null
+`,
+				},
+			},
+			outputFiles: []file{
+				{
+					path: "test/everything.yaml",
+					contents: `
+  args: []
+  env: {}
+  volumes: []
+  value: ""
+  value: ""
+`,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+
+			testLogger := &logger.TestLogger{T: t}
+
+			fakeFS := afero.Afero{Fs: afero.NewMemMapFs()}
+			lt := &LocalTemplater{
+				FS:     fakeFS,
+				Logger: testLogger,
+			}
+
+			// add inputFiles to fakeFS
+			for _, file := range tt.inputFiles {
+				req.NoError(fakeFS.WriteFile(file.path, []byte(file.contents), os.FileMode(777)))
+			}
+
+			req.NoError(lt.validateGeneratedFiles(fakeFS, tt.dir))
+
+			// check outputFiles from fakeFS
+			for _, file := range tt.outputFiles {
+				contents, err := fakeFS.ReadFile(file.path)
+				req.NoError(err)
+				req.Equal(file.contents, string(contents), "expected %s contents to be equal", file.path)
 			}
 		})
 	}

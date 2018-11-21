@@ -4,7 +4,6 @@ import (
 	"fmt"
 	golog "log"
 	"os"
-
 	"path"
 
 	"github.com/go-kit/kit/log"
@@ -31,7 +30,7 @@ func (c *compositeLogger) Log(keyvals ...interface{}) error {
 // New builds a logger from env using viper
 func New(v *viper.Viper, fs afero.Afero) log.Logger {
 
-	fullPathCaller := pathCaller(5)
+	fullPathCaller := pathCaller(6)
 	var stdoutLogger log.Logger
 	stdoutLogger = withFormat(viper.GetString("log-format"))
 	stdoutLogger = log.With(stdoutLogger, "ts", log.DefaultTimestampUTC)

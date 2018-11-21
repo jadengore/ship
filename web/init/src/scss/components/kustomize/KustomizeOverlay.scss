@@ -30,6 +30,12 @@
     position: relative;
   }
 }
+.base-editor-wrapper {
+  display: none;
+  &.visible {
+    display: flex;
+  }
+}
 
 .icon.u-closeOverlayIcon {
   position: absolute;
@@ -165,6 +171,34 @@
       background: #ffffff;
       color: #C4C8CA;
     }
+  }
+}
+
+.add-new-resource {
+  top: -10px;
+  .Input {
+    margin: 0 0 0 30px;
+    height: 20px;
+    font-size: 12px;
+    line-height: 2em;
+    background: #193B5B;
+    border: 0;
+    color: #fff;
+    width: 100%;
+    border: solid 1px;
+    border-radius: 2px;
+    border-color: rgba(255, 255, 255, 0.2);
+    &::placeholder {
+      color: rgba(255, 255, 255, 0.7);
+    }
+  }
+}
+
+.add-resource-link {
+  padding-left: 20px;
+  color: white;
+  &.hidden {
+    visibility: hidden;
   }
 }
 

@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"strings"
-
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/replicatedhq/ship/pkg/ship"
 	"github.com/spf13/cobra"
@@ -44,6 +44,8 @@ func App() *cobra.Command {
 	cmd.Flags().String("runbook", "", developerFlagUsage)
 	cmd.Flags().String("set-channel-name", "", developerFlagUsage)
 	cmd.Flags().String("set-channel-icon", "", developerFlagUsage)
+	cmd.Flags().StringSlice("set-github-contents", []string{}, fmt.Sprintf("Specify a REPO:REPO_PATH:REF:LOCAL_PATH to override github checkouts to use a local path on the filesystem. %s. ", developerFlagUsage))
+	cmd.Flags().String("set-entitlements-json", "{\"values\":[]}", fmt.Sprintf("Specify json for entitlements payload. %s", developerFlagUsage))
 
 	// Deprecated developer flags
 	cmd.Flags().String("studio-file", "", developerFlagUsage)

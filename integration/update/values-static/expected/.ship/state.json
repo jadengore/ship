@@ -1,7 +1,7 @@
 {
   "v1": {
     "config": {},
-    "helmValues": "image:\n  repository: nginx\n  tag: stable\nreplicaCount: 2\n",
+    "helmValues": "replicaCount: 2\nimage:\n  repository: nginx\n  tag: stable\n",
     "helmValuesDefaults": "replicaCount: 1\nimage:\n  repository: nginx\n  tag: stable\n\n",
     "kustomize": {
       "overlays": {
@@ -14,11 +14,11 @@
     },
     "metadata": {
       "applicationType": "helm",
-      "icon": "",
       "name": "values-update",
       "releaseNotes": "add static chart (will not be updated)",
       "version": "0.1.0"
     },
+    "releaseName": "values-update",
     "upstream": "github.com/replicatedhq/test-charts/values-static",
     "contentSHA": "77129bbe0cc210b60ae3a2a5775f79a7888d444a2081e6e4f190ebaf2a8da53d"
   }

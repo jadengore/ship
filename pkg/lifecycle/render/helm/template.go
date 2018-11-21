@@ -1,24 +1,26 @@
 package helm
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/replicatedhq/ship/pkg/constants"
-	"github.com/replicatedhq/ship/pkg/lifecycle/render/root"
-	"github.com/replicatedhq/ship/pkg/process"
-	"github.com/replicatedhq/ship/pkg/util"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/replicatedhq/libyaml"
 	"github.com/replicatedhq/ship/pkg/api"
+	"github.com/replicatedhq/ship/pkg/constants"
+	"github.com/replicatedhq/ship/pkg/lifecycle/render/root"
+	"github.com/replicatedhq/ship/pkg/process"
 	"github.com/replicatedhq/ship/pkg/state"
 	"github.com/replicatedhq/ship/pkg/templates"
+	"github.com/replicatedhq/ship/pkg/util"
 	"github.com/spf13/afero"
 	"github.com/spf13/viper"
 )
@@ -56,7 +58,11 @@ func NewTemplater(
 	}
 }
 
-var releaseNameRegex = regexp.MustCompile("[^a-zA-Z0-9\\-]")
+var arrayLineRegex = regexp.MustCompile(`^\s*(args|volumes):\s*$`)
+var envLineRegex = regexp.MustCompile(`^\s*env:\s*$`)
+var valueLineRegex = regexp.MustCompile(`^\s*value:\s*$`)
+
+var nullValueLineRegex = regexp.MustCompile(`^(\s*value:)\s*null\s*$`)
 
 // LocalTemplater implements Templater by using the Commands interface
 // from pkg/helm and creating the chart in place
@@ -98,9 +104,15 @@ func (f *LocalTemplater) Template(
 		return errors.Wrapf(err, "create tmp directory in %s", constants.ShipPathInternalTmp)
 	}
 
-	releaseName := strings.ToLower(fmt.Sprintf("%s", meta.ReleaseName()))
-	releaseName = releaseNameRegex.ReplaceAllLiteralString(releaseName, "-")
-	debug.Log("event", "releasename.resolve", "releasename", releaseName)
+	state, err := f.StateManager.TryLoad()
+	if err != nil {
+		debug.Log("event", "tryloadState.fail", "err", err)
+		return errors.Wrapf(err, "try load state")
+	}
+
+	versioned := state.Versioned()
+	releaseName := versioned.CurrentReleaseName()
+	debug.Log("event", "releasename.resolve.fromState", "releasename", releaseName)
 
 	templateArgs := []string{
 		"--output-dir", renderDest,
@@ -117,7 +129,7 @@ func (f *LocalTemplater) Template(
 	}
 
 	debug.Log("event", "helm.dependency.update")
-	if err := f.Commands.DependencyUpdate(chartRoot); err != nil {
+	if err := f.Commands.MaybeDependencyUpdate(chartRoot); err != nil {
 		return errors.Wrap(err, "update helm dependencies")
 	}
 
@@ -149,6 +161,8 @@ func (f *LocalTemplater) Template(
 		templateArgs = append(templateArgs, args...)
 	}
 
+	templateArgs = addArgIfNotPresent(templateArgs, "--namespace", "default")
+
 	debug.Log("event", "helm.template")
 	if err := f.Commands.Template(chartRoot, templateArgs); err != nil {
 		debug.Log("event", "helm.template.err")
@@ -160,6 +174,17 @@ func (f *LocalTemplater) Template(
 		return err
 	}
 	return f.cleanUpAndOutputRenderedFiles(rootFs, asset, tempRenderedChartDir)
+}
+
+// checks to see if the specified arg is present in the list. If it is not, adds it set to the specified value
+func addArgIfNotPresent(existingArgs []string, newArg string, newDefault string) []string {
+	for _, arg := range existingArgs {
+		if arg == newArg {
+			return existingArgs
+		}
+	}
+
+	return append(existingArgs, newArg, newDefault)
 }
 
 func (f *LocalTemplater) appendHelmValues(
@@ -253,6 +278,11 @@ func (f *LocalTemplater) cleanUpAndOutputRenderedFiles(
 		return errors.Wrap(err, "unable to find tmp rendered chart")
 	}
 
+	err := f.validateGeneratedFiles(f.FS, tempRenderedChartDir)
+	if err != nil {
+		return errors.Wrapf(err, "unable to validate chart dir")
+	}
+
 	debug.Log("event", "readdir", "folder", tempRenderedChartTemplatesDir)
 	files, err := f.FS.ReadDir(tempRenderedChartTemplatesDir)
 	if err != nil {
@@ -312,7 +342,7 @@ func (f *LocalTemplater) writeStateHelmValuesTo(dest string, defaultValuesPath s
 		defaultHelmValues = defaultValuesShippedWithChart
 	}
 
-	mergedValues, err := MergeHelmValues(defaultHelmValues, helmValues, defaultValuesShippedWithChart)
+	mergedValues, err := MergeHelmValues(defaultHelmValues, helmValues, defaultValuesShippedWithChart, false)
 	if err != nil {
 		return errors.Wrap(err, "merge helm values")
 	}
@@ -333,4 +363,143 @@ func (f *LocalTemplater) writeStateHelmValuesTo(dest string, defaultValuesPath s
 	}
 
 	return nil
+}
+
+// validate each file to make sure that it conforms to the yaml spec
+// TODO replace this with an actual validation tool
+func (f *LocalTemplater) validateGeneratedFiles(
+	fs afero.Afero,
+	dir string,
+) error {
+	debug := level.Debug(log.With(f.Logger, "method", "validateGeneratedFiles"))
+
+	debug.Log("event", "readdir", "folder", dir)
+	files, err := fs.ReadDir(dir)
+	if err != nil {
+		debug.Log("event", "readdir.fail", "folder", dir)
+		return errors.Wrapf(err, "failed to read folder %s", dir)
+	}
+
+	for _, file := range files {
+		thisPath := filepath.Join(dir, file.Name())
+		if file.IsDir() {
+			err := f.validateGeneratedFiles(fs, thisPath)
+			if err != nil {
+				return err
+			}
+		} else {
+			err := fixFile(fs, thisPath, file.Mode())
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func fixFile(fs afero.Afero, thisPath string, mode os.FileMode) error {
+	contents, err := fs.ReadFile(thisPath)
+	if err != nil {
+		return errors.Wrapf(err, "failed to read file %s", thisPath)
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(contents))
+
+	lines := []string{}
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return errors.Wrapf(err, "failed to read lines from file %s", thisPath)
+	}
+
+	lines = fixLines(lines)
+
+	var outputFile bytes.Buffer
+	for idx, line := range lines {
+		if idx+1 != len(lines) || contents[len(contents)-1] == '\n' {
+			fmt.Fprintln(&outputFile, line)
+		} else {
+			// avoid adding trailing newlines
+			fmt.Fprintf(&outputFile, line)
+		}
+	}
+
+	err = fs.WriteFile(thisPath, outputFile.Bytes(), mode)
+	if err != nil {
+		return errors.Wrapf(err, "failed to write file %s after fixup", thisPath)
+	}
+
+	return nil
+}
+
+// applies all fixes to all lines provided
+func fixLines(lines []string) []string {
+	for idx, line := range lines {
+		if arrayLineRegex.MatchString(line) {
+			// line has `key:` and nothing else but whitespace
+			if !checkIsChild(line, nextLine(idx, lines)) {
+				// next line is not a child, so this key has no contents, add an empty array
+				lines[idx] = line + " []"
+			}
+		} else if envLineRegex.MatchString(line) {
+			// line has `env:` and nothing else but whitespace
+			if !checkIsChild(line, nextLine(idx, lines)) {
+				// next line is not a child, so env has no contents, add an empty object
+				lines[idx] = line + " {}"
+			}
+		} else if valueLineRegex.MatchString(line) {
+			// line has `value:` and nothing else but whitespace
+			if !checkIsChild(line, nextLine(idx, lines)) {
+				// next line is not a child, so value has no contents, add an empty string
+				lines[idx] = line + ` ""`
+			}
+		} else if nullValueLineRegex.MatchString(line) {
+			// line has `value: null`
+			matches := nullValueLineRegex.FindStringSubmatch(line)
+
+			if len(matches) >= 2 && matches[0] == line {
+				lines[idx] = matches[1] + ` ""`
+			}
+		}
+	}
+
+	return lines
+}
+
+// returns true if the second line is a child of the first
+func checkIsChild(firstLine, secondLine string) bool {
+	cutset := fmt.Sprintf(" \t")
+	firstIndentation := len(firstLine) - len(strings.TrimLeft(firstLine, cutset))
+	secondIndentation := len(secondLine) - len(strings.TrimLeft(secondLine, cutset))
+
+	if firstIndentation < secondIndentation {
+		// if the next line is more indented, it's a child
+		return true
+	}
+
+	if firstIndentation == secondIndentation {
+		if secondLine[secondIndentation] == '-' {
+			// if the next line starts with '-' and is on the same indentation, it's a child
+			return true
+		}
+	}
+
+	return false
+}
+
+// returns the next line after idx that is not entirely whitespace or a comment. If there are no lines meeting these criteria, returns ""
+func nextLine(idx int, lines []string) string {
+	if idx+1 >= len(lines) {
+		return ""
+	}
+
+	if len(strings.TrimSpace(lines[idx+1])) > 0 {
+		if strings.TrimSpace(lines[idx+1])[0] != '#' {
+			return lines[idx+1]
+		}
+	}
+
+	return nextLine(idx+1, lines)
 }

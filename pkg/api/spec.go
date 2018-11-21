@@ -1,5 +1,14 @@
 package api
 
+import (
+	"regexp"
+	"strings"
+
+	"github.com/replicatedhq/ship/pkg/constants"
+)
+
+var releaseNameRegex = regexp.MustCompile("[^a-zA-Z0-9\\-]")
+
 // Spec is the top level Ship document that defines an application
 type Spec struct {
 	Assets    Assets    `json:"assets" yaml:"assets" hcl:"asset"`
@@ -57,19 +66,26 @@ type ReleaseMetadata struct {
 	Images          []Image         `json:"images" yaml:"images" hcl:"images" meta:"images"`
 	GithubContents  []GithubContent `json:"githubContents" yaml:"githubContents" hcl:"githubContents" meta:"githubContents"`
 	ShipAppMetadata ShipAppMetadata `json:"shipAppMetadata" yaml:"shipAppMetadata" hcl:"shipAppMetadata" meta:"shipAppMetadata"`
+	Entitlements    Entitlements    `json:"entitlements" yaml:"entitlements" hcl:"entitlements" meta:"entitlements"`
 }
 
-func (r *ReleaseMetadata) ReleaseName() string {
+func (r ReleaseMetadata) ReleaseName() string {
+	var releaseName string
+
 	if r.ChannelName != "" {
-		return r.ChannelName
+		releaseName = r.ChannelName
 	}
 
 	if r.ShipAppMetadata.Name != "" {
-		return r.ShipAppMetadata.Name
+		releaseName = r.ShipAppMetadata.Name
 	}
 
-	return "ship"
+	if len(releaseName) == 0 {
+		return "ship"
+	}
 
+	releaseName = strings.ToLower(releaseName)
+	return releaseNameRegex.ReplaceAllLiteralString(releaseName, "-")
 }
 
 // Release
@@ -85,4 +101,13 @@ func (r *Release) FindRenderStep() *Render {
 		}
 	}
 	return nil
+}
+
+func (r *Release) FindRenderRoot() string {
+	render := r.FindRenderStep()
+	if render == nil {
+		return constants.InstallerPrefixPath
+	}
+
+	return render.RenderRoot()
 }

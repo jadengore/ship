@@ -3,6 +3,7 @@ package replicatedapp
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
@@ -29,6 +30,8 @@ type resolver struct {
 	SetChannelName       string
 	RunbookReleaseSemver string
 	SetChannelIcon       string
+	SetGitHubContents    []string
+	SetEntitlementsJSON  string
 }
 
 // NewAppResolver builds a resolver from a Viper instance
@@ -46,6 +49,8 @@ func NewAppResolver(
 		Runbook:              flags.GetCurrentOrDeprecatedString(v, "runbook", "studio-file"),
 		SetChannelName:       flags.GetCurrentOrDeprecatedString(v, "set-channel-name", "studio-channel-name"),
 		SetChannelIcon:       flags.GetCurrentOrDeprecatedString(v, "set-channel-icon", "studio-channel-icon"),
+		SetGitHubContents:    v.GetStringSlice("set-github-contents"),
+		SetEntitlementsJSON:  v.GetString("set-entitlements-json"),
 		RunbookReleaseSemver: v.GetString("release-semver"),
 		StateManager:         stateManager,
 		ShaSummer: func(bytes []byte) string {
@@ -73,9 +78,18 @@ type Resolver interface {
 // ResolveAppRelease uses the passed config options to get specs from pg.replicated.com or
 // from a local runbook if so configured
 func (r *resolver) ResolveAppRelease(ctx context.Context, selector *Selector) (*api.Release, error) {
+	debug := level.Debug(log.With(r.Logger, "method", "ResolveAppRelease"))
 	release, err := r.FetchRelease(ctx, selector)
 	if err != nil {
 		return nil, errors.Wrap(err, "fetch release")
+	}
+
+	releaseName := release.ToReleaseMeta().ReleaseName()
+	debug.Log("event", "resolve.releaseName")
+
+	if err := r.StateManager.SerializeReleaseName(releaseName); err != nil {
+		debug.Log("event", "serialize.releaseName.fail", "err", err)
+		return nil, errors.Wrapf(err, "serialize helm release name")
 	}
 
 	result, err := r.persistRelease(release, selector)
@@ -136,29 +150,6 @@ func (r *resolver) persistRelease(release *ShipRelease, selector *Selector) (*ap
 	return result, nil
 }
 
-func (r *resolver) resolveRunbookRelease() (*ShipRelease, error) {
-	debug := level.Debug(log.With(r.Logger, "method", "resolveRunbookRelease"))
-	debug.Log("phase", "load-specs", "from", "runbook", "file", r.Runbook)
-
-	specYAML, err := r.FS.ReadFile(r.Runbook)
-	if err != nil {
-		return nil, errors.Wrapf(err, "read specs from %s", r.Runbook)
-	}
-	debug.Log("phase", "load-specs", "from", "runbook", "file", r.Runbook, "spec", specYAML)
-
-	if err := r.persistSpec(specYAML); err != nil {
-		return nil, errors.Wrapf(err, "serialize last-used YAML to disk")
-	}
-	debug.Log("phase", "write-yaml", "from", r.Runbook, "write-location", constants.ReleasePath)
-
-	return &ShipRelease{
-		Spec:        string(specYAML),
-		ChannelName: r.SetChannelName,
-		ChannelIcon: r.SetChannelIcon,
-		Semver:      r.RunbookReleaseSemver,
-	}, nil
-}
-
 func (r *resolver) resolveCloudRelease(selector *Selector) (*ShipRelease, error) {
 	debug := level.Debug(log.With(r.Logger, "method", "resolveCloudSpec"))
 
@@ -206,4 +197,12 @@ func (r *resolver) RegisterInstall(ctx context.Context, selector Selector, relea
 	debug.Log("phase", "register", "status", "complete")
 
 	return nil
+}
+func (r *resolver) loadFakeEntitlements() (*api.Entitlements, error) {
+	var entitlements api.Entitlements
+	err := json.Unmarshal([]byte(r.SetEntitlementsJSON), &entitlements)
+	if err != nil {
+		return nil, errors.Wrap(err, "load entitlements json")
+	}
+	return &entitlements, nil
 }

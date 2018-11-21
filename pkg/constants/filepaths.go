@@ -9,6 +9,8 @@ const (
 	ShipPathInternal = ".ship"
 	// KustomizeBasePath is the path to which assets to be kustomized are written
 	KustomizeBasePath = "base"
+	// GithubAssetSavePath is the path that github assets are initially fetched to
+	GithubAssetSavePath = "tmp-github-asset"
 )
 
 var (
@@ -28,4 +30,6 @@ var (
 	TempApplyOverlayPath = path.Join("overlays", "tmp-apply")
 	// HelmChartPath is the path used to store Helm chart contents
 	HelmChartPath = path.Join(ShipPathInternalTmp, "chart")
+	// RepoSavePath is the path that upstreams are initially fetched to
+	RepoSavePath = path.Join(ShipPathInternalTmp, "tmp-repo")
 )

@@ -2,7 +2,9 @@ package specs
 
 import (
 	"context"
+	"os"
 	"path"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-kit/kit/log"
@@ -10,6 +12,7 @@ import (
 	"github.com/replicatedhq/ship/pkg/api"
 	replicatedapp2 "github.com/replicatedhq/ship/pkg/specs/replicatedapp"
 	"github.com/replicatedhq/ship/pkg/test-mocks/apptype"
+	"github.com/replicatedhq/ship/pkg/test-mocks/githubclient"
 	"github.com/replicatedhq/ship/pkg/test-mocks/replicatedapp"
 	"github.com/replicatedhq/ship/pkg/test-mocks/state"
 	"github.com/replicatedhq/ship/pkg/test-mocks/ui"
@@ -20,6 +23,7 @@ import (
 )
 
 func TestResolver_ResolveRelease(t *testing.T) {
+	viperResolver := Resolver{Viper: viper.New()}
 	ctx := context.Background()
 	tests := []struct {
 		name      string
@@ -32,6 +36,7 @@ func TestResolver_ResolveRelease(t *testing.T) {
 			mockState *state.MockManager,
 			mockFs afero.Afero,
 			mockAppResolver *replicatedapp.MockResolver,
+			mockReleaseNotesFetcher *githubclient.MockGitHubReleaseNotesFetcher,
 		)
 		expectRelease *api.Release
 	}{
@@ -48,6 +53,7 @@ func TestResolver_ResolveRelease(t *testing.T) {
 				mockState *state.MockManager,
 				mockFs afero.Afero,
 				mockAppResolver *replicatedapp.MockResolver,
+				mockReleaseNotesFetcher *githubclient.MockGitHubReleaseNotesFetcher,
 			) {
 				req := require.New(t)
 				inOrder := mockUi.EXPECT().Info("Reading github.com/helm/charts/stable/x5 ...")
@@ -71,29 +77,35 @@ icon: https://kfbr.392/x5.png
 					}).After(inOrder)
 				inOrder = mockUi.EXPECT().Info("Detected application type helm").After(inOrder)
 				inOrder = mockState.EXPECT().SerializeUpstream("github.com/helm/charts/stable/x5").After(inOrder)
+				mockReleaseNotesFetcher.EXPECT().
+					ResolveReleaseNotes(ctx, "github.com/helm/charts/stable/x5").
+					Return("some release notes", nil)
 				inOrder = mockState.EXPECT().SerializeContentSHA("abcdef1234567890").After(inOrder)
 				inOrder = mockState.EXPECT().SerializeShipMetadata(api.ShipAppMetadata{
-					Version:    "0.1.0",
-					Name:       "i know what the x5 is",
-					Icon:       "https://kfbr.392/x5.png",
-					Readme:     "its the readme",
-					ContentSHA: "abcdef1234567890",
-					URL:        "github.com/helm/charts/stable/x5",
+					Version:      "0.1.0",
+					Name:         "i know what the x5 is",
+					Icon:         "https://kfbr.392/x5.png",
+					Readme:       "its the readme",
+					ReleaseNotes: "some release notes",
+					ContentSHA:   "abcdef1234567890",
+					URL:          "github.com/helm/charts/stable/x5",
 				}, "helm").After(inOrder)
 				inOrder = mockUi.EXPECT().Info("Looking for ship.yaml ...").After(inOrder)
-				mockUi.EXPECT().Info("ship.yaml not found in upstream, generating default lifecycle for application ...").After(inOrder)
+				inOrder = mockUi.EXPECT().Info("ship.yaml not found in upstream, generating default lifecycle for application ...").After(inOrder)
+				mockState.EXPECT().SerializeReleaseName("i-know-what-the-x5-is").After(inOrder)
 
 			},
 			expectRelease: &api.Release{
-				Spec: DefaultHelmRelease(".ship/tmp/chart"),
+				Spec: viperResolver.DefaultHelmRelease("fake-tmp"),
 				Metadata: api.ReleaseMetadata{
 					ShipAppMetadata: api.ShipAppMetadata{
-						Version:    "0.1.0",
-						URL:        "github.com/helm/charts/stable/x5",
-						Readme:     "its the readme",
-						Icon:       "https://kfbr.392/x5.png",
-						Name:       "i know what the x5 is",
-						ContentSHA: "abcdef1234567890",
+						Version:      "0.1.0",
+						URL:          "github.com/helm/charts/stable/x5",
+						Readme:       "its the readme",
+						Icon:         "https://kfbr.392/x5.png",
+						Name:         "i know what the x5 is",
+						ContentSHA:   "abcdef1234567890",
+						ReleaseNotes: "some release notes",
 					},
 				},
 			},
@@ -108,6 +120,7 @@ icon: https://kfbr.392/x5.png
 				mockState *state.MockManager,
 				mockFs afero.Afero,
 				mockAppResolver *replicatedapp.MockResolver,
+				mockReleaseNotesFetcher *githubclient.MockGitHubReleaseNotesFetcher,
 			) {
 				inOrder := mockUi.EXPECT().Info("Reading replicated.app?customer_id=12345&installation_id=67890 ...")
 				inOrder = mockUi.EXPECT().Info("Determining application type ...").After(inOrder)
@@ -147,6 +160,7 @@ icon: https://kfbr.392/x5.png
 				mockState *state.MockManager,
 				mockFs afero.Afero,
 				mockAppResolver *replicatedapp.MockResolver,
+				mockReleaseNotesFetcher *githubclient.MockGitHubReleaseNotesFetcher,
 			) {
 				req := require.New(t)
 				inOrder := mockUi.EXPECT().Info("Reading github.com/replicatedhq/test-charts/plain-k8s ...")
@@ -162,13 +176,16 @@ icon: https://kfbr.392/x5.png
 					}).After(inOrder)
 				inOrder = mockUi.EXPECT().Info("Detected application type k8s").After(inOrder)
 				inOrder = mockState.EXPECT().SerializeUpstream("github.com/replicatedhq/test-charts/plain-k8s").After(inOrder)
+				inOrder = mockReleaseNotesFetcher.EXPECT().
+					ResolveReleaseNotes(ctx, "github.com/replicatedhq/test-charts/plain-k8s").
+					Return("plain-k8s example", nil).After(inOrder)
 				inOrder = mockState.EXPECT().SerializeContentSHA("abcdef1234567890").After(inOrder)
 				inOrder = mockUi.EXPECT().Info("Looking for ship.yaml ...").After(inOrder)
-				mockUi.EXPECT().Info("ship.yaml not found in upstream, generating default lifecycle for application ...").After(inOrder)
-
+				inOrder = mockUi.EXPECT().Info("ship.yaml not found in upstream, generating default lifecycle for application ...").After(inOrder)
+				mockState.EXPECT().SerializeReleaseName("ship").After(inOrder)
 			},
 			expectRelease: &api.Release{
-				Spec: DefaultRawRelease("base"),
+				Spec: viperResolver.DefaultRawRelease("base"),
 				Metadata: api.ReleaseMetadata{
 					ShipAppMetadata: api.ShipAppMetadata{
 						URL:          "github.com/replicatedhq/test-charts/plain-k8s",
@@ -188,6 +205,7 @@ icon: https://kfbr.392/x5.png
 			appType := apptype.NewMockInspector(mc)
 			mockState := state.NewMockManager(mc)
 			mockAppResolver := replicatedapp.NewMockResolver(mc)
+			mockReleaseNotesFetcher := githubclient.NewMockGitHubReleaseNotesFetcher(mc)
 
 			// need a real FS because afero.Rename on a memMapFs doesn't copy directories recursively
 			fs := afero.Afero{Fs: afero.NewOsFs()}
@@ -201,16 +219,17 @@ icon: https://kfbr.392/x5.png
 			req.NoError(err)
 
 			resolver := &Resolver{
-				Logger:           log.NewNopLogger(),
-				StateManager:     mockState,
-				FS:               mockFs,
-				AppResolver:      mockAppResolver,
-				Viper:            viper.New(),
-				ui:               mockUI,
-				appTypeInspector: appType,
-				shaSummer:        test.shaSummer,
+				Logger:                    log.NewNopLogger(),
+				StateManager:              mockState,
+				FS:                        mockFs,
+				AppResolver:               mockAppResolver,
+				Viper:                     viper.New(),
+				ui:                        mockUI,
+				appTypeInspector:          appType,
+				shaSummer:                 test.shaSummer,
+				GitHubReleaseNotesFetcher: mockReleaseNotesFetcher,
 			}
-			test.expect(t, mockUI, appType, mockState, mockFs, mockAppResolver)
+			test.expect(t, mockUI, appType, mockState, mockFs, mockAppResolver, mockReleaseNotesFetcher)
 
 			func() {
 				defer mc.Finish()
@@ -265,11 +284,135 @@ func TestResolver_ReadContentSHAForWatch(t *testing.T) {
 				appTypeInspector: inspector,
 				AppResolver:      resolver,
 				shaSummer:        test.shaSummer,
+				FS:               afero.Afero{Fs: afero.NewMemMapFs()},
 			}
 
 			sha, err := r.ReadContentSHAForWatch(ctx, test.upstream)
 			req.NoError(err)
 			req.Equal(test.expectSHA, sha)
+		})
+	}
+}
+
+func TestResolver_recursiveCopy(t *testing.T) {
+	type fileStruct struct {
+		name string
+		data string
+	}
+
+	tests := []struct {
+		name        string
+		fromPath    string
+		destPath    string
+		wantErr     bool
+		inputFiles  []fileStruct
+		outputFiles []fileStruct
+	}{
+		{
+			name:     "one file",
+			fromPath: "/test",
+			destPath: "/dest",
+			wantErr:  false,
+			inputFiles: []fileStruct{
+				{
+					name: "/test/main.yml",
+					data: `filedata`,
+				},
+			},
+			outputFiles: []fileStruct{
+				{
+					name: "/test/main.yml",
+					data: `filedata`,
+				},
+				{
+					name: "/dest/main.yml",
+					data: `filedata`,
+				},
+			},
+		},
+		{
+			name:     "two files, nested dirs",
+			fromPath: "/test",
+			destPath: "/dest",
+			wantErr:  false,
+			inputFiles: []fileStruct{
+				{
+					name: "/test/main.yml",
+					data: `filedata`,
+				},
+				{
+					name: "/test/a/test/dir/file.txt",
+					data: `nested`,
+				},
+			},
+			outputFiles: []fileStruct{
+				{
+					name: "/test/main.yml",
+					data: `filedata`,
+				},
+				{
+					name: "/test/a/test/dir/file.txt",
+					data: `nested`,
+				},
+				{
+					name: "/dest/main.yml",
+					data: `filedata`,
+				},
+				{
+					name: "/dest/a/test/dir/file.txt",
+					data: `nested`,
+				},
+			},
+		},
+		{
+			name:     "src does not exist, other files undisturbed",
+			fromPath: "/src",
+			destPath: "/dest",
+			wantErr:  false,
+			inputFiles: []fileStruct{
+				{
+					name: "/test/main.yml",
+					data: `filedata`,
+				},
+			},
+			outputFiles: []fileStruct{
+				{
+					name: "/test/main.yml",
+					data: `filedata`,
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := require.New(t)
+
+			// setup input FS
+			mockFs := afero.Afero{Fs: afero.NewMemMapFs()}
+			req.NoError(mockFs.MkdirAll(tt.fromPath, os.FileMode(0644)))
+			for _, inFile := range tt.inputFiles {
+				req.NoError(mockFs.MkdirAll(filepath.Dir(inFile.name), os.FileMode(0644)))
+				req.NoError(mockFs.WriteFile(inFile.name, []byte(inFile.data), os.FileMode(0644)))
+			}
+
+			r := Resolver{
+				FS:     mockFs,
+				Logger: log.NewNopLogger(),
+			}
+
+			// run copy function
+			if err := r.recursiveCopy(tt.fromPath, tt.destPath); (err != nil) != tt.wantErr {
+				t.Errorf("Resolver.recursiveCopy() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			// compare output FS
+			// this doesn't validate that there aren't extra files produced, but that shouldn't be a problem
+			for _, outFile := range tt.outputFiles {
+				fileBytes, err := mockFs.ReadFile(outFile.name)
+				req.NoError(err, "reading output file %s", outFile.name)
+
+				req.Equal(outFile.data, string(fileBytes), "compare file %s", outFile.name)
+			}
 		})
 	}
 }

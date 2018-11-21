@@ -3,15 +3,8 @@ package daemon
 import (
 	"fmt"
 	"net/http"
-	"sync"
-
-	"k8s.io/helm/pkg/chartutil"
-	"k8s.io/helm/pkg/lint/rules"
-	"k8s.io/helm/pkg/lint/support"
-
-	"github.com/replicatedhq/ship/pkg/constants"
-
 	"path"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-kit/kit/log"
@@ -19,6 +12,7 @@ import (
 	"github.com/mitchellh/cli"
 	"github.com/pkg/errors"
 	"github.com/replicatedhq/ship/pkg/api"
+	"github.com/replicatedhq/ship/pkg/constants"
 	"github.com/replicatedhq/ship/pkg/filetree"
 	"github.com/replicatedhq/ship/pkg/lifecycle/daemon/daemontypes"
 	"github.com/replicatedhq/ship/pkg/lifecycle/render/config/resolve"
@@ -26,6 +20,9 @@ import (
 	"github.com/replicatedhq/ship/pkg/state"
 	"github.com/spf13/afero"
 	"github.com/spf13/viper"
+	"k8s.io/helm/pkg/chartutil"
+	"k8s.io/helm/pkg/lint/rules"
+	"k8s.io/helm/pkg/lint/support"
 )
 
 type V1Routes struct {
@@ -100,7 +97,8 @@ func (d *V1Routes) getHelmMetadata(release *api.Release) gin.HandlerFunc {
 }
 
 type SaveValuesRequest struct {
-	Values string `json:"values"`
+	Values      string `json:"values"`
+	ReleaseName string `json:"releaseName"`
 }
 
 func (d *V1Routes) saveHelmValues(c *gin.Context) {
@@ -111,6 +109,7 @@ func (d *V1Routes) saveHelmValues(c *gin.Context) {
 	debug.Log("event", "request.bind")
 	if err := c.BindJSON(&request); err != nil {
 		level.Error(d.Logger).Log("event", "unmarshal request body failed", "err", err)
+		return
 	}
 
 	debug.Log("event", "validate")
@@ -123,13 +122,23 @@ func (d *V1Routes) saveHelmValues(c *gin.Context) {
 
 		level.Error(d.Logger).Log("event", "values.readDefault.fail")
 		c.AbortWithError(http.StatusInternalServerError, errors.Wrap(err, "read file values.yaml"))
+		return
 	}
 
-	debug.Log("event", "serialize")
-	err = d.StateManager.SerializeHelmValues(request.Values, string(chartDefaultValues))
-	if err != nil {
-		debug.Log("event", "seralize.fail", "err", err)
+	debug.Log("event", "serialize.helmValues")
+	if err := d.StateManager.SerializeHelmValues(request.Values, string(chartDefaultValues)); err != nil {
+		debug.Log("event", "seralize.helmValues.fail", "err", err)
 		c.AbortWithError(http.StatusInternalServerError, errors.New("internal_server_error"))
+		return
+	}
+
+	debug.Log("event", "serialize.helmReleaseName")
+	if len(request.ReleaseName) > 0 {
+		if err := d.StateManager.SerializeReleaseName(request.ReleaseName); err != nil {
+			debug.Log("event", "serialize.helmReleaseName.fail", "err", err)
+			c.AbortWithError(http.StatusInternalServerError, errors.New("internal_server_error"))
+			return
+		}
 	}
 	c.String(http.StatusOK, "")
 }

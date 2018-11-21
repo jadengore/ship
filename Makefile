@@ -9,10 +9,11 @@ UI = $(shell find web/app/init/build -name "*.js")
 DOCKER_REPO ?= replicated
 
 VERSION_PACKAGE = github.com/replicatedhq/ship/pkg/version
-VERSION=`git describe --tags &>/dev/null || echo "v0.0.1"`
-GIT_SHA=`git rev-parse HEAD`
+VERSION ?=`git describe --tags &>/dev/null || echo "v0.0.1"`
+GIT_SHA ?=`git rev-parse HEAD`
 DATE=`date -u +"%Y-%m-%dT%H:%M:%SZ"`
 
+ifneq "$(GIT_SHA)" ""
 define LDFLAGS
 -ldflags "\
 	-X ${VERSION_PACKAGE}.version=${VERSION} \
@@ -20,6 +21,14 @@ define LDFLAGS
 	-X ${VERSION_PACKAGE}.buildTime=${DATE} \
 "
 endef
+else
+define LDFLAGS
+-ldflags "\
+	-X ${VERSION_PACKAGE}.version=${VERSION} \
+	-X ${VERSION_PACKAGE}.buildTime=${DATE} \
+"
+endef
+endif
 
 .state/build-deps: hack/get_build_deps.sh
 	./hack/get_build_deps.sh
@@ -60,6 +69,7 @@ _mockgen:
 	mkdir -p pkg/test-mocks/helm
 	mkdir -p pkg/test-mocks/dockerlayer
 	mkdir -p pkg/test-mocks/github
+	mkdir -p pkg/test-mocks/githubclient
 	mkdir -p pkg/test-mocks/inline
 	mkdir -p pkg/test-mocks/daemon
 	mkdir -p pkg/test-mocks/tfplan
@@ -71,112 +81,119 @@ _mockgen:
 		-destination pkg/test-mocks/ui/ui.go \
 		-package ui \
 		github.com/mitchellh/cli \
-		Ui
+		Ui & \
 	mockgen \
 		-destination pkg/test-mocks/config/resolver.go \
 		-package config \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/config \
-		Resolver
+		Resolver & \
 	mockgen \
 		-destination pkg/test-mocks/daemon/daemon.go \
 		-package daemon \
 		github.com/replicatedhq/ship/pkg/lifecycle/daemon/daemontypes \
-		Daemon
+		Daemon & \
 	mockgen \
 		-destination pkg/test-mocks/planner/planner_mock.go \
 		-package planner \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/planner \
-		Planner
+		Planner & \
 	mockgen \
 		-destination pkg/test-mocks/images/saver/image_saver_mock.go \
 		-package saver \
 		github.com/replicatedhq/ship/pkg/images \
-		ImageSaver
+		ImageSaver & \
 	mockgen \
 		-destination pkg/test-mocks/images/image_manager_mock.go \
 		-package images \
 		github.com/replicatedhq/ship/pkg/images \
-		ImageManager
+		ImageManager & \
 	mockgen \
 		-destination pkg/test-mocks/images/pull_url_resovler_mock.go \
 		-package images \
 		github.com/replicatedhq/ship/pkg/images \
-		PullURLResolver
+		PullURLResolver & \
 	mockgen \
 		-destination pkg/test-mocks/helm/chart_fetcher_mock.go \
 		-package helm \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/helm \
-		ChartFetcher
+		ChartFetcher & \
 	mockgen \
 		-destination pkg/test-mocks/helm/templater_mock.go \
 		-package helm \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/helm \
-		Templater
+		Templater & \
 	mockgen \
 		-destination pkg/test-mocks/helm/commands_mock.go \
 		-package helm \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/helm \
-		Commands
+		Commands & \
 	mockgen \
 		-destination pkg/test-mocks/helm/renderer_mock.go \
 		-package helm \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/helm \
-		Renderer
+		Renderer & \
 	mockgen \
 		-destination pkg/test-mocks/docker/renderer_mock.go \
 		-package docker \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/docker \
-		Renderer
+		Renderer & \
 	mockgen \
 		-destination pkg/test-mocks/dockerlayer/archive_mock.go \
 		-package dockerlayer \
 		github.com/mholt/archiver \
-		Archiver
+		Archiver & \
 	mockgen \
 		-destination pkg/test-mocks/github/github_mock.go \
 		-package github \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/github \
-		Renderer
+		Renderer & \
 	mockgen \
 		-destination pkg/test-mocks/inline/inline_mock.go \
 		-package inline \
 		github.com/replicatedhq/ship/pkg/lifecycle/render/inline \
-		Renderer
+		Renderer & \
 	mockgen \
 		-destination pkg/test-mocks/tfplan/confirmer_mock.go \
 		-package tfplan \
 		github.com/replicatedhq/ship/pkg/lifecycle/terraform/tfplan \
-		PlanConfirmer
+		PlanConfirmer & \
 	mockgen \
 		-destination pkg/test-mocks/state/manager_mock.go \
 		-package state \
 		github.com/replicatedhq/ship/pkg/state \
-		Manager
+		Manager & \
 	mockgen \
 		-destination pkg/test-mocks/lifecycle/messenger_mock.go \
 		-package lifecycle \
 		github.com/replicatedhq/ship/pkg/lifecycle \
-		Messenger
+		Messenger & \
 	mockgen \
 		-destination pkg/test-mocks/lifecycle/renderer_mock.go \
 		-package lifecycle \
 		github.com/replicatedhq/ship/pkg/lifecycle \
-		Renderer
+		Renderer & \
 	mockgen \
 		-destination pkg/test-mocks/apptype/determine_type_mock.go \
 		-package apptype \
 		github.com/replicatedhq/ship/pkg/specs/apptype \
-		Inspector
+		Inspector & \
 	mockgen \
 		-destination pkg/test-mocks/replicatedapp/resolve_replicated_app.go \
 		-package replicatedapp \
 		github.com/replicatedhq/ship/pkg/specs/replicatedapp \
-		Resolver
+		Resolver & \
 	mockgen \
 		-destination pkg/test-mocks/util/asset_uploader.go \
 		-package util \
 		github.com/replicatedhq/ship/pkg/util \
-		AssetUploader
+		AssetUploader & \
+	mockgen \
+		-destination pkg/test-mocks/githubclient/release_note_fetcher.go \
+		-package githubclient \
+		github.com/replicatedhq/ship/pkg/specs/githubclient \
+		GitHubReleaseNotesFetcher & \
+	wait
+
 
 mockgen: _mockgen fmt
 
@@ -201,13 +218,21 @@ fmt: .state/build-deps .state/fmt
 
 vet: .state/vet
 
+.state/ineffassign: .state/build-deps $(SRC)
+	ineffassign ./pkg
+	ineffassign ./cmd
+	@mkdir -p .state
+	@touch .state/ineffassign
+
+ineffassign: .state/ineffassign
+
 .state/lint: $(SRC)
-	golint ./pkg/... | grep -vE '_mock|e2e' | grep -v "should have comment" | grep -v "comment on exported" | grep -v bindatafs || :
-	golint ./cmd/... | grep -vE '_mock|e2e' | grep -v "should have comment" | grep -v "comment on exported" | grep -v bindatafs || :
+	golint ./pkg/... | grep -vE '_mock|e2e' | grep -v "should have comment" | grep -v "comment on exported" | grep -v "package comment should be of the form" | grep -v bindatafs || :
+	golint ./cmd/... | grep -vE '_mock|e2e' | grep -v "should have comment" | grep -v "comment on exported" | grep -v "package comment should be of the form" | grep -v bindatafs || :
 	@mkdir -p .state
 	@touch .state/lint
 
-lint: vet .state/lint
+lint: vet ineffassign .state/lint
 
 .state/test: $(SRC)
 	go test ./pkg/... | grep -v '?'
@@ -221,7 +246,7 @@ test: lint .state/test
 	#the reduced parallelism here is to avoid hitting the memory limits - we consistently did so with two threads on a 4gb instance
 	go test -parallel 1 -p 1 -coverprofile=.state/coverage.out ./pkg/...
 
-citest: .state/vet .state/lint .state/coverage.out
+citest: .state/vet .state/ineffassign .state/lint .state/coverage.out
 
 .state/cc-test-reporter:
 	@mkdir -p .state/
@@ -236,7 +261,9 @@ build: fmt embed-ui-dev test bin/ship
 
 build-ci: ci-embed-ui bin/ship
 
-build-ci-cypress: mark-ui-gitignored pkg/lifeycle/daemon/ui.bindatafs.go bin/ship
+build-ci-cypress: mark-ui-gitignored pkg/lifecycle/daemon/ui.bindatafs.go bin/ship
+
+build-minimal: build-ui pkg/lifecycle/daemon/ui.bindatafs.go bin/ship
 
 bin/ship: $(FULLSRC)
 	go build \
@@ -263,7 +290,7 @@ run: build
 build_ship_integration_test:
 	docker build -t $(DOCKER_REPO)/ship-e2e-test:latest -f ./integration/Dockerfile .
 
-pkg/lifeycle/daemon/ui.bindatafs.go: .state/build-deps
+pkg/lifecycle/daemon/ui.bindatafs.go: .state/build-deps
 	go-bindata-assetfs -pkg daemon \
 	  -o pkg/lifecycle/daemon/ui.bindatafs.go \
 	  -prefix web/app \
@@ -273,11 +300,11 @@ mark-ui-gitignored:
 	cd pkg/lifecycle/daemon/; git update-index --assume-unchanged ui.bindatafs.go
 
 
-embed-ui: mark-ui-gitignored build-ui pkg/lifeycle/daemon/ui.bindatafs.go
+embed-ui: mark-ui-gitignored build-ui pkg/lifecycle/daemon/ui.bindatafs.go
 
-embed-ui-dev: mark-ui-gitignored build-ui-dev pkg/lifeycle/daemon/ui.bindatafs.go
+embed-ui-dev: mark-ui-gitignored build-ui-dev pkg/lifecycle/daemon/ui.bindatafs.go
 
-ci-embed-ui: mark-ui-gitignored pkg/lifeycle/daemon/ui.bindatafs.go
+ci-embed-ui: mark-ui-gitignored pkg/lifecycle/daemon/ui.bindatafs.go
 build-ui:
 	$(MAKE) -C web/app build_ship
 

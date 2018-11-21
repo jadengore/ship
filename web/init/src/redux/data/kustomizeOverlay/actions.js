@@ -79,13 +79,13 @@ export function saveKustomizeOverlay(payload) {
   };
 }
 
-export function deleteOverlay(path) {
+export function deleteOverlay(path, type) {
   return async (dispatch, getState) => {
     const { apiEndpoint } = getState();
     let response;
+    const url = `${apiEndpoint}/kustomize/${type}?path=${path}`;
     dispatch(loadingData("deleteOverlay", true));
     try {
-      const url = `${apiEndpoint}/kustomize/patch?path=${path}`;
       response = await fetch(url, {
         method: "DELETE",
         headers: {
@@ -104,6 +104,37 @@ export function deleteOverlay(path) {
       dispatch(getContentForStep("kustomize"));
     } catch (error) {
       dispatch(loadingData("deleteOverlay", false));
+      console.log(error)
+      return;
+    }
+  };
+}
+
+export function includeBase(path, type) {
+  return async (dispatch, getState) => {
+    const { apiEndpoint } = getState();
+    let response;
+    const url = `${apiEndpoint}/kustomize/include`;
+    dispatch(loadingData("includeBase", true));
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ path }),
+      });
+      if (!response.ok) {
+        dispatch(loadingData("includeBase", false));
+        return;
+      }
+      await response.json();
+      dispatch(loadingData("includeBase", false));
+      dispatch(getFileContent(path));
+      dispatch(getContentForStep("kustomize"));
+    } catch (error) {
+      dispatch(loadingData("includeBase", false));
       console.log(error)
       return;
     }
